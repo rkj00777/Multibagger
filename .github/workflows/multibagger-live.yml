@@ -1,5 +1,13 @@
 name: Multibagger Live
 on:
+  push:
+    branches: [main]
+    paths:
+      - "core/**"
+      - "multibagger/**"
+      - "scripts/**"
+      - "requirements.txt"
+      - ".github/workflows/multibagger-live.yml"
   workflow_dispatch:
   schedule:
     - cron: "45 12 * * 1-5"
