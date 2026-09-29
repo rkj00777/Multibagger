@@ -9,10 +9,10 @@ def nse_cross_section(as_of:str):
     latest AS (SELECT * FROM p QUALIFY row_number() OVER(PARTITION BY coalesce(isin,symbol) ORDER BY date DESC)=1),
     r AS (SELECT l.*, max(p.close) FILTER(WHERE p.date>=l.date-INTERVAL '252 days') OVER(PARTITION BY l.symbol) high_252, avg(p.turnover) FILTER(WHERE p.date>=l.date-INTERVAL '60 days') OVER(PARTITION BY l.symbol) avg_turnover_60d,
       max(p.date) OVER() data_date,
-      max(p.close) FILTER(WHERE p.date<=l.date-INTERVAL '21 days') OVER(PARTITION BY l.symbol) c21,
-      max(p.close) FILTER(WHERE p.date<=l.date-INTERVAL '63 days') OVER(PARTITION BY l.symbol) c63,
-      max(p.close) FILTER(WHERE p.date<=l.date-INTERVAL '126 days') OVER(PARTITION BY l.symbol) c126,
-      max(p.close) FILTER(WHERE p.date<=l.date-INTERVAL '252 days') OVER(PARTITION BY l.symbol) c252
+      arg_max(p.close,p.date) FILTER(WHERE p.date<=l.date-INTERVAL '21 days') OVER(PARTITION BY l.symbol) c21,
+      arg_max(p.close,p.date) FILTER(WHERE p.date<=l.date-INTERVAL '63 days') OVER(PARTITION BY l.symbol) c63,
+      arg_max(p.close,p.date) FILTER(WHERE p.date<=l.date-INTERVAL '126 days') OVER(PARTITION BY l.symbol) c126,
+      arg_max(p.close,p.date) FILTER(WHERE p.date<=l.date-INTERVAL '252 days') OVER(PARTITION BY l.symbol) c252
       FROM latest l JOIN p ON p.symbol=l.symbol)
     SELECT symbol,isin,name,series,date,close,volume,turnover,avg_turnover_60d,high_252,close/c21-1 ret_21d,close/c63-1 ret_63d,close/c126-1 ret_126d,close/c252-1 ret_252d,close/high_252-1 pct_off_high,data_date
     FROM r QUALIFY row_number() OVER(PARTITION BY symbol ORDER BY date DESC)=1
