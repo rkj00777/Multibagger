@@ -1,4 +1,4 @@
-import requests,re
+import requests,re\nfrom datetime import datetime,timedelta
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor,as_completed
 BASE="https://www.nseindia.com"
@@ -11,7 +11,7 @@ class NSECatalyst:
         except:pass
     def one(self,symbol,as_of):
         try:
-            p={"index":"equities","symbol":symbol,"from_date":as_of[:8],"to_date":as_of[:8],"page":1,"size":50}
+            d=datetime.strptime(as_of,"%Y-%m-%d"); p={"index":"equities","symbol":symbol,"from_date":(d-timedelta(days=30)).strftime("%d-%m-%Y"),"to_date":d.strftime("%d-%m-%Y"),"page":1,"size":50}
             r=self.s.get(URL,params=p,timeout=15)
             if not r.ok:return []
             data=r.json()
