@@ -16,6 +16,11 @@ def apply_trap_firewall(df):
         if num(r.get("ret_126d"),0)>1.0 and num(r.get("fundamental_score"),0)<45: flag(i,"extended_without_fundamental_confirmation")
         if num(r.get("fundamental_evidence"),0)<0.75: flag(i,"thin_fundamental_evidence")
         pe=r.get("pe_proxy")
-        if pe is not None and num(pe,float("nan"))==num(pe,float("nan")) and num(pe)>100: flag(i,"extreme_earnings_multiple")
+        if pe is not None:
+            try:
+                pv=float(pe)
+                if pv==pv and pv>100: flag(i,"extreme_earnings_multiple")
+            except (TypeError,ValueError):
+                pass
     x["trap_firewall_pass"]=x.trap_flags.map(len).eq(0)
     return x
