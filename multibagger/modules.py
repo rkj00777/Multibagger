@@ -19,6 +19,8 @@ def score_fundamentals(price_df,facts):
         roic=max(0,min(100,100*pat/equity)) if pd.notna(pat) and pd.notna(equity) and equity>0 else float("nan")
         lev=(debt-cash)/equity if all(pd.notna(x) for x in [debt,cash,equity]) and equity>0 else float("nan")
         gov=max(0,min(100,80-20*max(lev,0))) if pd.notna(lev) else 25
-        module_values={"valuation_gap":val,"earnings_acceleration":earn,"cash_conversion":cashs,"reinvestment_roic":roic,"governance_balance_sheet":gov}\n        available=sum(pd.notna(v) for v in module_values.values())\n        evidence=min(1.0,len(g)/4.0)*(available/5.0)
+        module_values={"valuation_gap":val,"earnings_acceleration":earn,"cash_conversion":cashs,"reinvestment_roic":roic,"governance_balance_sheet":gov}
+        available=sum(pd.notna(v) for v in module_values.values())
+        evidence=min(1.0,len(g)/4.0)*(available/5.0)
         rows.append({"symbol":sym,**module_values,"fundamental_evidence":evidence,"module_coverage":available/5.0,"pe_proxy":pe})
     return pd.DataFrame(rows)
