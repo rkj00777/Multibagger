@@ -1,30 +1,24 @@
 import pandas as pd
-MODULES=["valuation_gap","earnings_acceleration","cash_conversion","reinvestment_roic","governance_balance_sheet","industry_catalyst"]
-
+MODULES=["valuation_gap","earnings_acceleration","cash_conversion","reinvestment_roic","governance_balance_sheet"]
 def score_fundamentals(price_df,facts):
     if not facts:return pd.DataFrame()
-    f=pd.DataFrame(facts)
-    f["period_end"]=pd.to_datetime(f.period_end,errors="coerce")
-    f["available_at"]=pd.to_datetime(f.available_at,errors="coerce")
-    # Only compare facts with the same period; latest two periods are used.
-    piv=f.pivot_table(index=["symbol","period_end"],columns="metric",values="value",aggfunc="last").reset_index()
+    f=pd.DataFrame(facts);f["period_end"]=pd.to_datetime(f.period_end,errors="coerce");f["available_at"]=pd.to_datetime(f.available_at,errors="coerce")
+    p=f.pivot_table(index=["symbol","period_end"],columns="metric",values="value",aggfunc="last").reset_index()
     rows=[]
-    for sym,g in piv.groupby("symbol"):
-        g=g.sort_values("period_end")
-        cur=g.iloc[-1]; prev=g.iloc[-2] if len(g)>1 else None
-        revenue=float(cur.get("revenue",float("nan"))); pat=float(cur.get("pat",float("nan")))
-        cfo=float(cur.get("cfo",float("nan"))); capex=float(cur.get("capex",float("nan")))
-        debt=float(cur.get("debt",float("nan"))); cash=float(cur.get("cash",float("nan")))
-        equity=float(cur.get("equity",float("nan")))
-        scores={}
-        scores["earnings_acceleration"]=50 if prev is None else max(0,min(100,50+50*((pat/(abs(prev.get("pat",pat)) or 1))-1)))
-        scores["cash_conversion"]=max(0,min(100,50+50*(cfo/(abs(pat) or 1)-1))) if pd.notna(cfo) and pd.notna(pat) else 25
-        scores["reinvestment_roic"]=50 if not (pd.notna(pat) and pd.notna(equity) and equity) else max(0,min(100,100*(pat/equity)))
-        leverage=(debt-cash)/(equity or 1) if pd.notna(debt) and pd.notna(cash) and pd.notna(equity) else float("nan")
-        scores["governance_balance_sheet"]=max(0,min(100,80-20*max(leverage,0))) if pd.notna(leverage) else 25
-        scores["valuation_gap"]=50  # deliberately neutral until price-to-fundamental normalization is added
-        rows.append({"symbol":sym,**scores,"fundamental_evidence":min(1.0,len(g)/4)})
+    for sym,g in p.groupby("symbol"):
+        g=g.sort_values("period_end");cur=g.iloc[-1];prev=g.iloc[-2] if len(g)>1 else None
+        pat=float(cur.get("pat",float("nan")));cfo=float(cur.get("cfo",float("nan")));debt=float(cur.get("debt",float("nan")));cash=float(cur.get("cash",float("nan")));equity=float(cur.get("equity",float("nan")));shares=float(cur.get("shares",float("nan")))
+        px=price_df.loc[price_df.symbol.eq(sym),"close"]
+        price=float(px.iloc[0]) if len(px) else float("nan")
+        pe=(price*shares)/(pat*100000) if pd.notna(price) and pd.notna(shares) and pd.notna(pat) and pat>0 else float("nan")
+        # Conservative valuation bands; the engine reports this as a valuation proxy, not a peer-relative intrinsic value.
+        val=100 if pd.notna(pe) and pe<=15 else 80 if pd.notna(pe) and pe<=25 else 60 if pd.notna(pe) and pe<=40 else 40 if pd.notna(pe) and pe<=60 else 20 if pd.notna(pe) else float("nan")
+        earn=50
+        if prev is not None and pd.notna(prev.get("pat")) and abs(float(prev.get("pat") or 0))>0: earn=max(0,min(100,50+50*(pat/abs(float(prev.get("pat")))-1)))
+        cashs=max(0,min(100,50+50*(cfo/abs(pat)-1))) if pd.notna(cfo) and pd.notna(pat) and pat!=0 else 25
+        roic=max(0,min(100,100*pat/equity)) if pd.notna(pat) and pd.notna(equity) and equity>0 else 25
+        lev=(debt-cash)/equity if all(pd.notna(x) for x in [debt,cash,equity]) and equity>0 else float("nan")
+        gov=max(0,min(100,80-20*max(lev,0))) if pd.notna(lev) else 25
+        evidence=min(1.0,len(g)/4)
+        rows.append({"symbol":sym,"valuation_gap":val,"earnings_acceleration":earn,"cash_conversion":cashs,"reinvestment_roic":roic,"governance_balance_sheet":gov,"fundamental_evidence":evidence,"pe_proxy":pe})
     return pd.DataFrame(rows)
-
-def module_status(row):
-    return {m:float(row.get(m,0)) for m in MODULES}
