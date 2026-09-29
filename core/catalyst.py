@@ -37,7 +37,7 @@ def catalyst_score(items):
 
 
 class ScreenerCatalyst:
-    def __init__(self,workers=4):
+    def __init__(self,workers=8):
         self.workers=workers
         self.s=requests.Session()
         self.s.headers.update({"User-Agent":"Mozilla/5.0","Accept":"text/html,application/xhtml+xml"})
@@ -45,7 +45,7 @@ class ScreenerCatalyst:
         try:
             from bs4 import BeautifulSoup
             u=f"https://www.screener.in/company/{symbol}/"
-            r=self.s.get(u,timeout=25)
+            r=self.s.get(u,timeout=10)
             if not r.ok:return []
             soup=BeautifulSoup(r.text,"html.parser")
             text=soup.get_text(" ",strip=True)
