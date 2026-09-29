@@ -1,0 +1,4 @@
+duckdb>=1.1
+pandas>=2.2
+pyarrow>=18.0
+requests>=2.32
