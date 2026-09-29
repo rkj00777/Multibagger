@@ -65,7 +65,7 @@ def filing_rows(payload):
         if not u: continue
         symbol=next((v for k,v in low.items() if k in ("symbol","sym")),None)
         isin=next((v for k,v in low.items() if k in ("isin","sm_isin","isinno")),None)
-        pe=next((v for k,v in low.items() if k in ("periodend","period_end","quarterend","quarter_end","todate","to_date","enddate","end_date")),None)
+        pe=next((v for k,v in low.items() if k in ("periodend","period_end","quarterend","quarter_end","todate","to_date","enddate","end_date","periodenddate","period_end_date")),None)\n        if pe is None: pe=next((v for k,v in low.items() if "period" in k and "end" in k),None)
         avail=next((dt(v) for k,v in low.items() if k in ("exchdisstime","exchangedisseminationtime","broadcastdatetime","broadcastdate","broadcast_date","filingdatetime","filingdate") and dt(v)),None)
         if u and (symbol or isin):
             out.append({"symbol":symbol,"isin":isin,"period_end":dt(pe) if pe else None,"available_at":avail,"xbrl_url":u,"raw":d})
