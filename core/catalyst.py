@@ -15,7 +15,8 @@ class NSECatalyst:
             r=self.s.get(URL,params=p,timeout=15)
             if not r.ok:return []
             data=r.json()
-            return data.get("data",data if isinstance(data,list) else [])
+            rows=data.get("data",data if isinstance(data,list) else [])
+            return [{**x,"symbol":x.get("symbol") or x.get("sym") or symbol} if isinstance(x,dict) else {"symbol":symbol,"text":x} for x in rows]
         except:return []
     def batch(self,symbols,as_of):
         out=[]
