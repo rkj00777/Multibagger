@@ -2,3 +2,5 @@ duckdb>=1.1
 pandas>=2.2
 pyarrow>=18.0
 requests>=2.32
+beautifulsoup4>=4.12
+lxml>=5.3
