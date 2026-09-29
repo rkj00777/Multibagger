@@ -1,18 +1,17 @@
-import pandas as pd
-
 def apply_trap_firewall(df):
     x=df.copy()
-    rules={
-      "negative_cfo": x.get("cfo_score",pd.Series(50,index=x.index)).fillna(50)<25,
-      "balance_sheet_stress": x.get("governance_balance_sheet",pd.Series(50,index=x.index)).fillna(50)<25,
-      "earnings_collapse": x.get("earnings_acceleration",pd.Series(50,index=x.index)).fillna(50)<20,
-      "extended_without_confirmation": (x.get("ret_126d",0)>1.0) & (x.get("fundamental_score",0)<45),
-      "evidence_thin": x.get("fundamental_evidence",0)<0.75,
-    }
-    flags=[]
-    for i in x.index:
-        f=[k for k,v in rules.items() if bool(v.loc[i])]
-        flags.append(f)
-    x["trap_flags"]=flags
+    x["trap_flags"]=[[] for _ in range(len(x))]
+    def flag(i,name):
+        if name not in x.at[i,"trap_flags"]:x.at[i,"trap_flags"].append(name)
+    for i,r in x.iterrows():
+        if float(r.get("cash_conversion",50))<25:flag(i,"negative_cash_conversion")
+        if float(r.get("governance_balance_sheet",50))<25:flag(i,"balance_sheet_stress")
+        if float(r.get("earnings_acceleration",50))<20:flag(i,"earnings_collapse")
+        if float(r.get("ret_126d",0))>1.0 and float(r.get("fundamental_score",0))<45:flag(i,"extended_without_fundamental_confirmation")
+        if float(r.get("fundamental_evidence",0))<0.75:flag(i,"thin_fundamental_evidence")
+        if pd_notna(r.get("pe_proxy")) and float(r.get("pe_proxy"))>100:flag(i,"extreme_earnings_multiple")
     x["trap_firewall_pass"]=x.trap_flags.map(len).eq(0)
     return x
+def pd_notna(v):
+    try:return v==v
+    except:return False
