@@ -134,7 +134,7 @@ class NSEFundamentals:
             if r.ok:
                 rows=filing_rows(r.json())
                 cutoff=dt(as_of+" 23:59:59")
-                rows=[x for x in rows if x.get("available_at") is None or x["available_at"]<=cutoff]
+                rows=[x for x in rows if x.get("available_at") is not None and x["available_at"]<=cutoff]
                 rows.sort(key=lambda x:(x.get("period_end") or datetime.min,x.get("available_at") or datetime.min),reverse=True)
                 return rows
         except: pass
