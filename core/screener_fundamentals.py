@@ -78,14 +78,14 @@ class ScreenerFundamentals:
     """Free fallback for public Screener annual P&L, balance-sheet and cash-flow data.
     Deliberately labelled non-PIT because page publication timestamps are not independently recoverable.
     """
-    def __init__(self,workers=4):
+    def __init__(self,workers=12):
         self.workers=workers
         self.s=requests.Session()
         self.s.headers.update({"User-Agent":"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/131 Safari/537.36","Accept":"text/html,application/xhtml+xml"})
     def one(self,symbol,as_of):
         try:
             u=BASE+symbol+"/consolidated/"
-            r=self.s.get(u,timeout=25)
+            r=self.s.get(u,timeout=10)
             if not r.ok or len(r.text)<5000:
                 u=BASE+symbol+"/"
                 r=self.s.get(u,timeout=25)
