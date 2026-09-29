@@ -1,5 +1,4 @@
 import requests,re\nfrom datetime import datetime,timedelta
-from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor,as_completed
 BASE="https://www.nseindia.com"
 URL=BASE+"/api/corporate-announcements"
