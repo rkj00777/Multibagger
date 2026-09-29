@@ -34,3 +34,31 @@ def catalyst_score(items):
     text=" ".join(str(x).lower() for x in items)
     p=sum(text.count(k) for k in positive); n=sum(text.count(k) for k in negative)
     return max(0,min(100,50+10*p-15*n))
+
+
+class ScreenerCatalyst:
+    def __init__(self,workers=4):
+        self.workers=workers
+        self.s=requests.Session()
+        self.s.headers.update({"User-Agent":"Mozilla/5.0","Accept":"text/html,application/xhtml+xml"})
+    def one(self,symbol,as_of):
+        try:
+            from bs4 import BeautifulSoup
+            u=f"https://www.screener.in/company/{symbol}/"
+            r=self.s.get(u,timeout=25)
+            if not r.ok:return []
+            soup=BeautifulSoup(r.text,"html.parser")
+            text=soup.get_text(" ",strip=True)
+            # Restrict the catalyst scan to the public Documents/Announcements area when possible.
+            m=re.search(r"Announcements(.*?)Annual reports",text,re.I|re.S)
+            block=m.group(1) if m else text[-12000:]
+            return [{"symbol":symbol,"text":block,"source_type":"SCREENER_PUBLIC_FALLBACK","source_url":u}]
+        except:return []
+    def batch(self,symbols,as_of):
+        out=[]
+        with ThreadPoolExecutor(max_workers=self.workers) as ex:
+            fut={ex.submit(self.one,s,as_of):s for s in symbols}
+            for f in as_completed(fut):
+                try: out.extend(f.result())
+                except: pass
+        return out
