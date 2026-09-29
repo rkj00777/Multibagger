@@ -10,7 +10,7 @@ jobs:
       - run: pip install -r requirements.txt
       - run: python -m py_compile core/market_data.py multibagger/engine.py scripts/run_live.py
       - name: Execute live Multibagger scan
-        run: python scripts/run_live.py
+        run: PYTHONPATH=. python scripts/run_live.py
       - name: Upload live scan
         uses: actions/upload-artifact@v4
         with:
