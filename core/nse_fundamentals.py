@@ -7,6 +7,7 @@ from bs4 import BeautifulSoup
 
 BASE="https://www.nseindia.com"
 API=BASE+"/api/integrated-filing-results"
+LEGACY=BASE+"/api/corporates-financial-results"
 ALIASES={
 "revenue":["RevenueFromOperations","Revenue","IncomeFromOperations","Turnover"],
 "pat":["ProfitLoss","ProfitForThePeriod","ProfitAfterTax","NetProfit"],
@@ -114,6 +115,18 @@ class NSEFundamentals:
         try:self.s.get(BASE+"/",timeout=15)
         except:pass
     def catalog(self,symbol,as_of,page_size=100):
+        # Pre-2025 snapshots use NSE legacy Financial Results; 2025+ uses Integrated Filing.
+        if str(as_of)[:4] < "2025":
+            p={"index":"equities","period":"Quarterly","page":1,"size":page_size,"symbol":symbol}
+            try:
+                rr=self.s.get(LEGACY,params=p,timeout=20)
+                if rr.ok:
+                    rows=filing_rows(rr.json()); cutoff=dt(as_of+" 23:59:59")
+                    rows=[x for x in rows if x.get("available_at") is None or x["available_at"]<=cutoff]
+                    rows.sort(key=lambda x:(x.get("period_end") or datetime.min,x.get("available_at") or datetime.min),reverse=True)
+                    return rows
+            except: pass
+            return []
         p={"type":"Integrated Filing- Financials","page":1,"size":page_size,"index":"equities","period_ended":"all","symbol":symbol}
         try:
             r=self.s.get(API,params=p,timeout=20)
