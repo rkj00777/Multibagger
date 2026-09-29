@@ -2,7 +2,7 @@ import pandas as pd
 from core.market_data import nse_cross_section
 from core.nse_fundamentals import NSEFundamentals
 from core.screener_fundamentals import ScreenerFundamentals
-from core.catalyst import NSECatalyst, catalyst_score
+from core.catalyst import NSECatalyst, ScreenerCatalyst, catalyst_score
 from multibagger.modules import score_fundamentals
 from multibagger.firewall import apply_trap_firewall
 VERSION="3.0.0-free-pit-aware"
@@ -24,7 +24,12 @@ def run(as_of:str):
     if not fs.empty: discovery=discovery.merge(fs,on="symbol",how="left")
     else:
         for c in ["valuation_gap","earnings_acceleration","cash_conversion","reinvestment_roic","governance_balance_sheet","fundamental_score","fundamental_evidence"]:discovery[c]=float("nan")
-    cats=NSECatalyst(workers=8).batch(discovery.symbol.tolist(),as_of);catmap={}
+    cats=NSECatalyst(workers=8).batch(discovery.symbol.tolist(),as_of)
+    catalyst_source="NSE_CORPORATE_ANNOUNCEMENTS"
+    if not cats:
+        cats=ScreenerCatalyst(workers=4).batch(discovery.symbol.tolist(),as_of)
+        catalyst_source="SCREENER_PUBLIC_FALLBACK_NON_PIT"
+    catmap={}
     for x in cats:
         sym=x.get("symbol") or x.get("sym")
         if sym:catmap.setdefault(sym,[]).append(x)
@@ -34,4 +39,5 @@ def run(as_of:str):
     discovery["promoted"]=discovery.fundamental_score.ge(65)&discovery.catalyst_score.ge(55)&discovery.fundamental_evidence.ge(.75)&discovery.trap_firewall_pass&discovery.trend_score.ge(70)
     cols=["symbol","name","close","ret_63d","ret_126d","ret_252d","trend_score","discovery_score","fundamental_score","catalyst_score","fundamental_evidence","trap_flags","trap_firewall_pass","promoted"]
     out=discovery[cols].sort_values(["promoted","fundamental_score","discovery_score"],ascending=False).head(30).round(4)
-    return {"engine":"Multibagger","version":VERSION,"as_of_requested":as_of,"data_date":str(df.data_date.max())[:10],"status":"LIVE_SCAN_COMPLETE","universe_rows":int(len(df)),"liquid_eligible":int(len(eligible)),"candidate_pool":int(len(discovery)),"fundamental_facts":int(len(fundamentals)),"fundamental_data_status":fundamental_source,"pit_rule":"NSE facts require timestamp <= as_of; Screener fallback is current public data and publication timestamp is not independently recoverable","fundamental_modules_verified":5,"promotion_count":int(discovery.promoted.sum()),"promotion_block":None if discovery.promoted.any() else "No candidate cleared all five fundamental modules + catalyst + firewall gates","validation_status":"CURRENT_PIT_LIVE_MODULE_RUN; HISTORICAL_WALK_FORWARD_VALIDATION_SEPARATE","top_candidates":out.to_dict(orient="records")}
+    return {"engine":"Multibagger","version":VERSION,"as_of_requested":as_of,"data_date":str(df.data_date.max())[:10],"status":"LIVE_SCAN_COMPLETE","universe_rows":int(len(df)),"liquid_eligible":int(len(eligible)),"candidate_pool":int(len(discovery)),"fundamental_facts":int(len(fundamentals)),"fundamental_data_status":fundamental_source,"pit_rule":"NSE facts require timestamp <= as_of; Screener fallback is current public data and publication timestamp is not independently recoverable","fundamental_modules_verified":5,
+        "catalyst_data_status":catalyst_source,"promotion_count":int(discovery.promoted.sum()),"promotion_block":None if discovery.promoted.any() else "No candidate cleared all five fundamental modules + catalyst + firewall gates","validation_status":"CURRENT_PIT_LIVE_MODULE_RUN; HISTORICAL_WALK_FORWARD_VALIDATION_SEPARATE","top_candidates":out.to_dict(orient="records")}
