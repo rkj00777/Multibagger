@@ -1,6 +1,12 @@
 name: Multibagger Live
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - "multibagger/**"
+      - "core/market_data.py"
+      - "scripts/run_live.py"
+      - ".github/workflows/multibagger-live.yml"
   schedule:
     - cron: "45 12 * * 1-5"
 concurrency:
@@ -25,7 +31,7 @@ jobs:
           PIT_WORKERS: "6"
         run: |
           AS_OF="$(date -u +%F)"
-          PYTHONPATH=. python scripts/ingest_pit.py --as-of "$AS_OF" --limit 300
+          PYTHONPATH=. python scripts/ingest_pit.py --as-of "$AS_OF" --limit 500
       - name: Persist PIT evidence
         run: |
           git config user.name "multibagger-bot"
