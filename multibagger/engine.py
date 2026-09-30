@@ -18,7 +18,10 @@ def run(as_of:str):
     df["trend_score"]=pct(df.ret_63d.fillna(-1e9))*.25+pct(df.ret_126d.fillna(-1e9))*.35+pct(df.ret_252d.fillna(-1e9))*.40
     df["liquidity_score"]=pct(df.avg_turnover_60d.fillna(0)); df["discovery_score"]=df.trend_score*.75+df.liquidity_score*.25
     eligible=df[(df.avg_turnover_60d>=2_000_000)&df.ret_126d.notna()].copy()
-    discovery=eligible.sort_values(["discovery_score","liquidity_score"],ascending=False).head(150).copy()
+    # Adaptive funnel sizes: no fixed 100/150/2000 assumption.
+    n_universe=len(df)
+    n_discovery=min(max(100, int(n_universe*0.10)), 2000)
+    discovery=eligible.sort_values(["discovery_score","liquidity_score"],ascending=False).head(n_discovery).copy()
     pit=load_facts(as_of); pit_stats=pit_coverage(pit)
     facts=pit[pit.symbol.isin(discovery.symbol)] if not pit.empty else pd.DataFrame()
     records=facts.to_dict(orient="records") if not facts.empty else []
@@ -37,7 +40,8 @@ def run(as_of:str):
     from multibagger.mbe_core import score_mbe_core
     fundamental_pool=score_mbe_core(fundamental_pool)
     pre=apply_trap_firewall(fundamental_pool); fundamental_pool["trap_flags"]=pre["trap_flags"]; fundamental_pool["trap_firewall_pass"]=pre["trap_firewall_pass"]
-    mbe_pool=fundamental_pool.sort_values(["trap_firewall_pass","mbe_score"],ascending=False).head(15).copy()
+    n_mbe=min(max(10, int(len(fundamental_pool)*0.40)), 100)
+    mbe_pool=fundamental_pool.sort_values(["trap_firewall_pass","mbe_score"],ascending=False).head(n_mbe).copy()
     # 15 -> 8: catalyst/news verification only on MBE finalists.
     cats=NSECatalyst(workers=4).batch(mbe_pool.symbol.tolist(),as_of); catmap={}
     for item in cats:
@@ -50,4 +54,4 @@ def run(as_of:str):
     final=mbe_pool[mbe_pool.trap_firewall_pass&mbe_pool.catalyst_score.ge(55)].sort_values(["catalyst_score","mbe_score","fundamental_score"],ascending=False).head(8).copy()
     promoted=final[final.mbe_score.ge(65)&final.fundamental_score.ge(60)&final.fundamental_evidence.ge(.75)&final.catalyst_score.ge(60)&final.trap_firewall_pass].copy()
     cols=[c for c in ["symbol","name","close","ret_63d","ret_126d","ret_252d","discovery_score","fundamental_score","fundamental_evidence","mbe_score","catalyst_score","earnings_inflection","order_visibility","capacity_inflection","structural_theme","early_inflection_score","early_stage","trap_flags","trap_firewall_pass","promoted"] if c in final.columns]
-    return {"engine":"Multibagger","version":VERSION,"as_of_requested":as_of,"data_date":str(df.data_date.max())[:10],"status":"LIVE_SCAN_COMPLETE","universe_rows":int(len(df)),"liquid_eligible":int(len(eligible)),"discovery_pool":int(len(discovery)),"fundamental_pool":int(len(fundamental_pool)),"mbe_pool":int(len(mbe_pool)),"final_shortlist":int(len(final)),"fundamental_facts":int(len(records)),"fundamental_data_status":"NSE_XBRL_PIT_STORE","pit_rule":"Only facts with NSE exchange availability/broadcast timestamp <= as_of are eligible","pit_coverage":pit_stats,"catalyst_data_status":"NSE_CORPORATE_ANNOUNCEMENTS_FINALIST_ONLY","promotion_count":int(len(promoted)),"promotion_block":None if len(promoted) else "No finalist cleared all MBE, catalyst, evidence and firewall gates","funnel":["5000+ universe","150 discovery","30 fundamental","15 MBE","8 catalyst finalists"],"final_candidates":final[cols].to_dict(orient="records"),"promoted_candidates":promoted[cols].to_dict(orient="records"),"validation_status":"CURRENT_PIT_LIVE_MODULE_RUN; HISTORICAL_WINNER_AUDIT_SEPARATE"}
+    return {"engine":"Multibagger","version":VERSION,"as_of_requested":as_of,"data_date":str(df.data_date.max())[:10],"status":"LIVE_SCAN_COMPLETE","universe_rows":int(len(df)),"liquid_eligible":int(len(eligible)),"discovery_pool":int(len(discovery)),"fundamental_pool":int(len(fundamental_pool)),"mbe_pool":int(len(mbe_pool)),"final_shortlist":int(len(final)),"fundamental_facts":int(len(records)),"fundamental_data_status":"NSE_XBRL_PIT_STORE","pit_rule":"Only facts with NSE exchange availability/broadcast timestamp <= as_of are eligible","pit_coverage":pit_stats,"catalyst_data_status":"NSE_CORPORATE_ANNOUNCEMENTS_FINALIST_ONLY","promotion_count":int(len(promoted)),"promotion_block":None if len(promoted) else "No finalist cleared all MBE, catalyst, evidence and firewall gates","funnel":{"available_universe":int(n_universe),"discovery":int(len(discovery)),"fundamental":int(len(fundamental_pool)),"mbe":int(len(mbe_pool)),"catalyst_finalists":int(len(final))},"final_candidates":final[cols].to_dict(orient="records"),"promoted_candidates":promoted[cols].to_dict(orient="records"),"validation_status":"CURRENT_PIT_LIVE_MODULE_RUN; HISTORICAL_WINNER_AUDIT_SEPARATE"}
