@@ -1,0 +1,25 @@
+{
+  "as_of": "2026-09-30",
+  "facts_observed": 45488,
+  "months": [
+    "2025-04.jsonl",
+    "2025-05.jsonl",
+    "2025-07.jsonl",
+    "2025-08.jsonl",
+    "2025-10.jsonl",
+    "2025-11.jsonl",
+    "2025-12.jsonl",
+    "2026-01.jsonl",
+    "2026-02.jsonl",
+    "2026-03.jsonl",
+    "2026-04.jsonl",
+    "2026-05.jsonl",
+    "2026-06.jsonl",
+    "2026-07.jsonl",
+    "2026-08.jsonl",
+    "2026-09.jsonl"
+  ],
+  "pit_rule": "available_at <= as_of",
+  "source": "NSE_XBRL",
+  "symbols_requested": 500
+}
