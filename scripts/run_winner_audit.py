@@ -24,7 +24,7 @@ CHECKPOINTS = ["2026-02-06","2026-03-06","2026-04-06","2026-05-06"]
 HF="https://huggingface.co/datasets/tejhq/indian-markets/resolve/main"
 
 def prices(symbols):
-    paths=f"[{HF}/nse/year=2026/nse_2026.parquet]"
+    paths=f"['{HF}/nse/year=2026/nse_2026.parquet']"
     syms=",".join("'" + s.replace("'","''") + "'" for s in symbols)
     c=duckdb.connect()
     q=f"""select symbol,date,close from read_parquet({paths},union_by_name=true)
