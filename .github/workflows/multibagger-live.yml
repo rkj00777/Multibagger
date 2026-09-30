@@ -6,16 +6,43 @@ on:
 concurrency:
   group: multibagger-live
   cancel-in-progress: false
+permissions:
+  contents: write
 jobs:
   run:
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - run: pip install -r requirements.txt
-      - run: PYTHONPATH=. python scripts/run_live.py
+      - name: Ingest exchange-first PIT fundamentals
+        env:
+          PIT_WORKERS: "6"
+        run: PYTHONPATH=. python scripts/ingest_pit.py --as-of "$AS_OF" --limit 300
+        env:
+          AS_OF: ${{ inputs.as_of || '' }}
+      - name: Run Multibagger
+        env:
+          AS_OF: ${{ inputs.as_of || '' }}
+        run: |
+          if [ -z "$AS_OF" ]; then AS_OF="$(date -u +%F)"; fi
+          AS_OF="$AS_OF" PYTHONPATH=. python scripts/run_live.py
+      - name: Persist PIT evidence
+        run: |
+          git config user.name "multibagger-bot"
+          git config user.email "multibagger-bot@users.noreply.github.com"
+          git add data/pit
+          if git diff --cached --quiet; then
+            echo "No new PIT evidence."
+          else
+            git commit -m "Archive PIT evidence"
+            git push
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: multibagger-live-report
