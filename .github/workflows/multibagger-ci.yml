@@ -9,10 +9,13 @@ jobs:
         with: {python-version: "3.12"}
       - run: pip install -r requirements.txt
       - run: python -m py_compile core/*.py multibagger/*.py scripts/*.py
-      - name: Execute live Multibagger scan
-        run: PYTHONPATH=. python scripts/run_live.py
-      - name: Upload live scan
-        uses: actions/upload-artifact@v4
-        with:
-          name: multibagger-live-report
-          path: reports/multibagger-live.json
+      - name: Run unit smoke tests
+        run: |
+          python - <<'PY'
+          from core.pit_store import coverage
+          import pandas as pd
+          assert coverage(pd.DataFrame())["facts"] == 0
+          from core.nse_pit import NSEPIT
+          assert callable(NSEPIT)
+          print("PIT foundation smoke test: PASS")
+          PY
