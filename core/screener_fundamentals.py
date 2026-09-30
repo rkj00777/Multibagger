@@ -5,6 +5,7 @@ import pandas as pd
 import requests
 
 BASE="https://www.screener.in/company/"
+JINA_BASE="https://r.jina.ai/http://www.screener.in/company/"
 
 def _num(v):
     if v is None: return None
@@ -68,7 +69,7 @@ def _row(table, label):
         if not q.empty: return q.iloc[0]
     return None
 
-def _annual_facts(symbol, html, as_of):
+def _annual_facts(symbol, html, as_of, source_type, source_url):
     try: tables=pd.read_html(html)
     except Exception: return []
     pl=_find_table(tables,{"sales","net profit","eps in rs"})
@@ -88,41 +89,48 @@ def _annual_facts(symbol, html, as_of):
         p=_period(c)
         if p: periods.append((c,p))
     out=[]
-    for c,p in periods[-8:]:
+    for c,p in periods[-10:]:
         vals={k:_num(r.get(c)) if r is not None and c in r.index else None for k,r in rows.items()}
         if vals.get("pat") is None and vals.get("sales") is None: continue
         for metric,key in (("revenue","sales"),("pat","pat"),("eps","eps"),("debt","debt")):
             if vals.get(key) is not None:
                 out.append({"metric":metric,"value":vals[key],"period_end":p,"available_at":as_of,
-                            "source_type":"SCREENER_PUBLIC_FALLBACK","source_url":BASE+symbol+"/consolidated/","symbol":symbol})
+                            "source_type":source_type,"source_url":source_url,"symbol":symbol})
         equity=(vals.get("equity_cap") or 0)+(vals.get("reserves") or 0)
         if equity>0:
             out.append({"metric":"equity","value":equity,"period_end":p,"available_at":as_of,
-                        "source_type":"SCREENER_PUBLIC_FALLBACK","source_url":BASE+symbol+"/consolidated/","symbol":symbol})
+                        "source_type":source_type,"source_url":source_url,"symbol":symbol})
         for metric,key in (("cfo","cfo"),("fcf","fcf")):
             if vals.get(key) is not None:
                 out.append({"metric":metric,"value":vals[key],"period_end":p,"available_at":as_of,
-                            "source_type":"SCREENER_PUBLIC_FALLBACK","source_url":BASE+symbol+"/consolidated/","symbol":symbol})
+                            "source_type":source_type,"source_url":source_url,"symbol":symbol})
     return out
 
 class ScreenerFundamentals:
-    """Free current-data fallback. Explicitly non-PIT because Screener page publication timestamps are not independently recoverable."""
+    """Online public-data fallback. Current pages contain historical periods; publication timestamps are not treated as PIT."""
     def __init__(self,workers=12):
         self.workers=workers
         self.s=requests.Session()
-        self.s.headers.update({"User-Agent":"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/131 Safari/537.36",
-                               "Accept":"text/html,application/xhtml+xml"})
+        self.s.headers.update({
+            "User-Agent":"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/131 Safari/537.36",
+            "Accept":"text/html,application/xhtml+xml,application/xhtml+xml"
+        })
 
     def one(self,symbol,as_of):
-        try:
-            u=BASE+symbol+"/consolidated/"
-            r=self.s.get(u,timeout=15)
-            if not r.ok or len(r.text)<5000:
-                u=BASE+symbol+"/"
-                r=self.s.get(u,timeout=20)
-            if r.ok: return _annual_facts(symbol,r.text,as_of)
-        except Exception:
-            pass
+        urls=[
+            (BASE+symbol+"/consolidated/","SCREENER_PUBLIC_FALLBACK"),
+            (BASE+symbol+"/","SCREENER_PUBLIC_FALLBACK"),
+            (JINA_BASE+symbol+"/consolidated/","SCREENER_JINA_PUBLIC_FALLBACK"),
+            (JINA_BASE+symbol+"/","SCREENER_JINA_PUBLIC_FALLBACK"),
+        ]
+        for u,stype in urls:
+            try:
+                r=self.s.get(u,timeout=25)
+                if r.ok and len(r.text)>=5000:
+                    facts=_annual_facts(symbol,r.text,as_of,stype,u)
+                    if facts: return facts
+            except Exception:
+                continue
         return []
 
     def batch(self,symbols,as_of):
