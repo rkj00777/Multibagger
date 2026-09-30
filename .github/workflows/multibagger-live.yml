@@ -26,10 +26,6 @@ jobs:
         run: |
           AS_OF="$(date -u +%F)"
           PYTHONPATH=. python scripts/ingest_pit.py --as-of "$AS_OF" --limit 300
-      - name: Run Multibagger
-        run: |
-          AS_OF="$(date -u +%F)"
-          AS_OF="$AS_OF" PYTHONPATH=. python scripts/run_live.py
       - name: Persist PIT evidence
         run: |
           git config user.name "multibagger-bot"
@@ -41,7 +37,12 @@ jobs:
             git commit -m "Archive PIT evidence"
             git push
           fi
+      - name: Run Multibagger
+        run: |
+          AS_OF="$(date -u +%F)"
+          AS_OF="$AS_OF" PYTHONPATH=. python scripts/run_live.py
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: multibagger-live-report
           path: reports/multibagger-live.json
