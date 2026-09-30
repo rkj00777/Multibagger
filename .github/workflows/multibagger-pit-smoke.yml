@@ -1,0 +1,43 @@
+name: Multibagger PIT Smoke
+on:
+  push:
+    paths:
+      - "core/nse_pit.py"
+      - "core/pit_store.py"
+      - "scripts/ingest_pit.py"
+      - ".github/workflows/multibagger-pit-smoke.yml"
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install -r requirements.txt
+      - name: NSE PIT acquisition smoke test
+        env:
+          PIT_WORKERS: "3"
+        run: |
+          AS_OF="$(date -u +%F)"
+          PYTHONPATH=. python scripts/ingest_pit.py --as-of "$AS_OF" --limit 10
+      - name: Validate persisted PIT evidence
+        run: |
+          PYTHONPATH=. python - <<'PY'
+          from datetime import date
+          from core.pit_store import load_facts, coverage
+          as_of=date.today().isoformat()
+          df=load_facts(as_of)
+          stats=coverage(df)
+          print(stats)
+          assert len(df) > 0, "No timestamped PIT facts acquired"
+          assert stats["symbols"] > 0, "No symbols acquired"
+          assert df["available_at"].notna().all(), "Missing availability timestamp"
+          assert (df["available_at"] <= __import__("pandas").Timestamp(as_of+" 23:59:59")).all(), "PIT leakage detected"
+          print("NSE PIT SMOKE TEST: PASS")
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: multibagger-pit-smoke
+          path: data/pit/
