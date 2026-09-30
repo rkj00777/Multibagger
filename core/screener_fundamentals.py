@@ -69,9 +69,38 @@ def _row(table, label):
         if not q.empty: return q.iloc[0]
     return None
 
+def _markdown_tables(text):
+    """Parse Jina Reader markdown tables into DataFrames."""
+    lines=[x.strip() for x in str(text).splitlines() if "|" in x]
+    tables=[]
+    i=0
+    while i < len(lines)-1:
+        if not lines[i].lstrip().startswith("|"):
+            i+=1
+            continue
+        if "---" not in lines[i+1]:
+            i+=1
+            continue
+        def cells(line):
+            return [x.strip() for x in line.strip().strip("|").split("|")]
+        cols=cells(lines[i])
+        rows=[]
+        i+=2
+        while i<len(lines) and lines[i].lstrip().startswith("|") and "---" not in lines[i]:
+            vals=cells(lines[i])
+            if len(vals)>=len(cols):
+                rows.append(vals[:len(cols)])
+            i+=1
+        if rows:
+            tables.append(pd.DataFrame(rows,columns=cols))
+    return tables
+
 def _annual_facts(symbol, html, as_of, source_type, source_url):
-    try: tables=pd.read_html(html)
-    except Exception: return []
+    try:
+        raw=str(html)
+        tables=_markdown_tables(raw) if ("| ---" in raw or "|---" in raw) else pd.read_html(raw)
+    except Exception:
+        return []
     pl=_find_table(tables,{"sales","net profit","eps in rs"})
     bs=_find_table(tables,{"borrowings","equity capital","reserves"})
     cf=_find_table(tables,{"cash from operating activity","free cash flow"})
@@ -126,7 +155,7 @@ class ScreenerFundamentals:
         for u,stype in urls:
             try:
                 r=self.s.get(u,timeout=25)
-                if r.ok and len(r.text)>=5000:
+                if r.ok and len(r.text)>=1500:
                     facts=_annual_facts(symbol,r.text,as_of,stype,u)
                     if facts: return facts
             except Exception:
