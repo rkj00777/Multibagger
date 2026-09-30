@@ -3,9 +3,10 @@
 Only normalized facts are persisted. Revisions remain distinct because
 available_at is part of the identity, allowing historical reconstruction.
 """
-import argparse, json, hashlib
+import argparse, json, hashlib, os
 from datetime import date
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from core.market_data import nse_cross_section
 from core.nse_pit import NSEPIT
 
@@ -20,9 +21,13 @@ symbols=(df.sort_values(["avg_turnover_60d","discovery_score"],ascending=False)
 
 client=NSEPIT()
 facts=[]
-for i,s in enumerate(symbols,1):
-    facts.extend(client.facts(s,args.as_of))
-    if i%25==0: print(f"processed={i}/{len(symbols)} facts={len(facts)}",flush=True)
+workers=min(6,max(1,int(os.getenv("PIT_WORKERS","6"))))
+with ThreadPoolExecutor(max_workers=workers) as ex:
+    fut={ex.submit(client.facts,s,args.as_of):s for s in symbols}
+    for i,fut_item in enumerate(as_completed(fut),1):
+        try: facts.extend(fut_item.result())
+        except Exception: pass
+        if i%25==0: print(f"processed={i}/{len(symbols)} facts={len(facts)}",flush=True)
 
 # Persist by availability month; this is an append-only PIT evidence store.
 root=Path("data/pit/facts"); root.mkdir(parents=True,exist_ok=True)
