@@ -72,26 +72,23 @@ def _catalog_rows(payload):
     out = []
     for d in _walk(payload):
         low = {str(k).lower(): v for k, v in d.items()}
-        xurl = None
-        for k, v in low.items():
-            if "xbrl" in k:
-                xurl = _url(v)
-                if xurl: break
+        # Current NSE Integrated Filing schema:
+        # symbol, smName/cmName, qe_Date, type_Sub, audited,
+        # consolidated, broadcast_Date, creation_Date, xbrl, ixbrl.
+        xurl = _url(low.get("xbrl"))
         if not xurl:
-            for v in low.values():
-                u = _url(v)
-                if u and ("xbrl" in u.lower() or "ixbrl" in u.lower()):
-                    xurl = u; break
-        if not xurl: continue
-        symbol = next((v for k,v in low.items() if k in ("symbol","sym")), None)
-        isin = next((v for k,v in low.items() if k in ("isin","sm_isin","isinno")), None)
-        period = next((v for k,v in low.items() if "period" in k and "end" in k), None)
-        avail = None
-        for k,v in low.items():
-            if any(x in k for x in ("broadcast","dissemination","exchange_received","filingdatetime","filingdate")):
-                avail = _dt(v)
-                if avail: break
-        if symbol or isin:
+            # tolerate minor schema variants
+            for k, v in low.items():
+                if "xbrl" in k and k != "ixbrl":
+                    xurl = _url(v)
+                    if xurl: break
+        symbol = low.get("symbol") or low.get("sym")
+        isin = low.get("isin") or low.get("sm_isin") or low.get("isinno")
+        period = low.get("qe_date") or low.get("qeDate") or low.get("period_end")
+        broadcast = low.get("broadcast_date") or low.get("broadcastdate")
+        creation = low.get("creation_date") or low.get("creationdate")
+        avail = _dt(creation) or _dt(broadcast)
+        if xurl and (symbol or isin) and period:
             out.append({
                 "symbol": str(symbol).upper().strip() if symbol else None,
                 "isin": isin,
