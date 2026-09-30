@@ -62,7 +62,6 @@ def audit_date(as_of):
     if target.empty:return []
     facts=NSEFundamentals(workers=6).batch(target.symbol.tolist(),as_of)
     fs=score_fundamentals(target,facts)
-    if fs.empty:return [{"decision_date":as_of,"symbol":s,"name":WINNERS[s],"status":"NO_PIT_FACTS"} for s in target.symbol]
     cats=NSECatalyst(workers=6).batch(target.symbol.tolist(),as_of)
     source="NSE"
     if not cats:
@@ -71,6 +70,17 @@ def audit_date(as_of):
     for x in cats:
         sym=x.get("symbol") or x.get("sym")
         if sym:catmap.setdefault(sym,[]).append(x)
+    if fs.empty:
+        z=target.copy()
+        z["fundamental_score"]=float("nan"); z["fundamental_evidence"]=0.0; z["governance_balance_sheet"]=float("nan")
+        ei=score_early_inflection(z,z,catmap)
+        z["catalyst_score"]=z.symbol.map(lambda s:catalyst_score(catmap.get(s,[])))
+        z["early_inflection_score"]=ei["early_inflection_score"].values
+        z["early_stage"]=ei["early_stage"].values
+        z["event_only_watch"]=z.early_inflection_score.ge(55)&z.catalyst_score.ge(55)
+        z["decision_date"]=as_of; z["name"]=z.symbol.map(WINNERS); z["catalyst_source"]=source
+        z["status"]="NO_PIT_FACTS_EVENT_ONLY"
+        return z[["decision_date","symbol","name","trend_score","fundamental_score","fundamental_evidence","catalyst_score","early_inflection_score","early_stage","event_only_watch","status"]].to_dict("records")
     z=target.merge(fs,on="symbol",how="left")
     z["catalyst_score"]=z.symbol.map(lambda s:catalyst_score(catmap.get(s,[])))
     z["fundamental_score"]=z[["valuation_gap","earnings_acceleration","cash_conversion","reinvestment_roic","governance_balance_sheet"]].mean(axis=1,skipna=False)
