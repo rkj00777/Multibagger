@@ -15,8 +15,8 @@ def _num(v):
 
 def _period(v):
     s=str(v).strip()
-    if re.fullmatch(r"Mar \d{4}",s): return datetime.strptime(s,"%b %Y").date().isoformat()
-    return None
+    m=re.fullmatch(r"Mar (\d{4})",s)
+    return datetime.strptime(s,"%b %Y").date().isoformat() if m else None
 
 def _flatten(df):
     x=df.copy()
@@ -30,20 +30,26 @@ def _flatten(df):
     x.iloc[:,0]=x.iloc[:,0].astype(str).str.replace(r"[+]$","",regex=True).str.strip()
     return x
 
+def _norm_label(v):
+    return re.sub(r"\s+"," ",re.sub(r"[^a-z0-9 ]+"," ",str(v).lower())).strip()
+
 def _find_table(tables, labels):
-    labels={x.lower() for x in labels}
+    labels={_norm_label(x) for x in labels}
     for t in tables:
         if t.empty: continue
         x=_flatten(t)
-        first=x.iloc[:,0].astype(str).str.lower().tolist()
-        if any(a in first for a in labels): return x
+        first=[_norm_label(v) for v in x.iloc[:,0].tolist()]
+        if any(any(a==b or a.startswith(b) or b.startswith(a) for b in labels) for a in first):
+            return x
     return None
 
 def _row(table, label):
     if table is None: return None
-    q=table[table.iloc[:,0].astype(str).str.lower().eq(label.lower())]
-    if q.empty: return None
-    return q.iloc[0]
+    target=_norm_label(label)
+    first=table.iloc[:,0].map(_norm_label)
+    mask=first.map(lambda x: x==target or x.startswith(target) or target.startswith(x))
+    q=table[mask]
+    return q.iloc[0] if not q.empty else None
 
 def _annual_facts(symbol, html, as_of):
     try: tables=pd.read_html(html)
@@ -52,7 +58,9 @@ def _annual_facts(symbol, html, as_of):
     bs=_find_table(tables,{"borrowings","equity capital","reserves"})
     cf=_find_table(tables,{"cash from operating activity","free cash flow"})
     if pl is None: return []
-    labels={"sales":"Sales","pat":"Net Profit","eps":"EPS in Rs","debt":"Borrowings","equity_cap":"Equity Capital","reserves":"Reserves","cfo":"Cash from Operating Activity","fcf":"Free Cash Flow"}
+    labels={"sales":"Sales","pat":"Net Profit","eps":"EPS in Rs","debt":"Borrowings",
+            "equity_cap":"Equity Capital","reserves":"Reserves",
+            "cfo":"Cash from Operating Activity","fcf":"Free Cash Flow"}
     rows={}
     for k,label in labels.items():
         src=pl if k in ("sales","pat","eps") else bs if k in ("debt","equity_cap","reserves") else cf
@@ -63,32 +71,37 @@ def _annual_facts(symbol, html, as_of):
         p=_period(c)
         if p: periods.append((c,p))
     out=[]
-    for c,p in periods[-6:]:
-        vals={k:_num(r.get(c)) if r is not None else None for k,r in rows.items()}
+    for c,p in periods[-8:]:
+        vals={k:_num(r.get(c)) if r is not None and c in r.index else None for k,r in rows.items()}
         if vals.get("pat") is None and vals.get("sales") is None: continue
         for metric,key in (("revenue","sales"),("pat","pat"),("eps","eps"),("debt","debt")):
-            if vals.get(key) is not None: out.append({"metric":metric,"value":vals[key],"period_end":p,"available_at":as_of,"source_type":"SCREENER_PUBLIC_FALLBACK","source_url":BASE+symbol+"/","symbol":symbol})
+            if vals.get(key) is not None:
+                out.append({"metric":metric,"value":vals[key],"period_end":p,"available_at":as_of,
+                            "source_type":"SCREENER_PUBLIC_FALLBACK","source_url":BASE+symbol+"/consolidated/","symbol":symbol})
         equity=(vals.get("equity_cap") or 0)+(vals.get("reserves") or 0)
-        if equity>0: out.append({"metric":"equity","value":equity,"period_end":p,"available_at":as_of,"source_type":"SCREENER_PUBLIC_FALLBACK","source_url":BASE+symbol+"/","symbol":symbol})
+        if equity>0:
+            out.append({"metric":"equity","value":equity,"period_end":p,"available_at":as_of,
+                        "source_type":"SCREENER_PUBLIC_FALLBACK","source_url":BASE+symbol+"/consolidated/","symbol":symbol})
         for metric,key in (("cfo","cfo"),("fcf","fcf")):
-            if vals.get(key) is not None: out.append({"metric":metric,"value":vals[key],"period_end":p,"available_at":as_of,"source_type":"SCREENER_PUBLIC_FALLBACK","source_url":BASE+symbol+"/","symbol":symbol})
+            if vals.get(key) is not None:
+                out.append({"metric":metric,"value":vals[key],"period_end":p,"available_at":as_of,
+                            "source_type":"SCREENER_PUBLIC_FALLBACK","source_url":BASE+symbol+"/consolidated/","symbol":symbol})
     return out
 
 class ScreenerFundamentals:
-    """Free fallback for public Screener annual P&L, balance-sheet and cash-flow data.
-    Deliberately labelled non-PIT because page publication timestamps are not independently recoverable.
-    """
+    """Free current-data fallback. Explicitly non-PIT because Screener page publication timestamps are not independently recoverable."""
     def __init__(self,workers=12):
         self.workers=workers
         self.s=requests.Session()
-        self.s.headers.update({"User-Agent":"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/131 Safari/537.36","Accept":"text/html,application/xhtml+xml"})
+        self.s.headers.update({"User-Agent":"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/131 Safari/537.36",
+                               "Accept":"text/html,application/xhtml+xml"})
     def one(self,symbol,as_of):
         try:
             u=BASE+symbol+"/consolidated/"
-            r=self.s.get(u,timeout=10)
+            r=self.s.get(u,timeout=15)
             if not r.ok or len(r.text)<5000:
                 u=BASE+symbol+"/"
-                r=self.s.get(u,timeout=25)
+                r=self.s.get(u,timeout=20)
             if r.ok: return _annual_facts(symbol,r.text,as_of)
         except: pass
         return []
