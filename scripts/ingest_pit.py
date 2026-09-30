@@ -16,7 +16,7 @@ p.add_argument("--limit",type=int,default=300)
 args=p.parse_args()
 
 df=nse_cross_section(args.as_of)
-symbols=(df.sort_values(["avg_turnover_60d","discovery_score"],ascending=False)
+symbols=(df.sort_values(["avg_turnover_60d","ret_126d"],ascending=False)
            .head(args.limit)["symbol"].dropna().astype(str).str.upper().tolist())
 
 client=NSEPIT()
