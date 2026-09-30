@@ -8,52 +8,69 @@ BASE="https://www.screener.in/company/"
 
 def _num(v):
     if v is None: return None
-    s=str(v).replace(",","").replace("%","").strip()
+    s=str(v).replace("\xa0"," ").replace(",","").replace("%","").strip()
     if s in ("","-","nan","None"): return None
     try: return float(s)
     except: return None
 
 def _period(v):
-    s=str(v).strip()
-    m=re.fullmatch(r"Mar (\d{4})",s)
-    return datetime.strptime(s,"%b %Y").date().isoformat() if m else None
+    s=str(v).replace("\xa0"," ").strip()
+    if s.upper()=="TTM": return None
+    m=re.search(r"(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{4})",s,re.I)
+    if not m: return None
+    try: return datetime.strptime(f"{m.group(1)[:3].title()} {m.group(2)}","%b %Y").date().isoformat()
+    except: return None
 
 def _flatten(df):
     x=df.copy()
+    if x.empty: return x
     if isinstance(x.columns,pd.MultiIndex):
         cols=[]
         for c in x.columns:
-            vals=[str(v) for v in c if str(v)!="nan"]
+            vals=[str(v).replace("\xa0"," ").strip() for v in c if str(v)!="nan"]
             cols.append(vals[-1] if vals else "")
         x.columns=cols
-    else: x.columns=[str(c) for c in x.columns]
-    x.iloc[:,0]=x.iloc[:,0].astype(str).str.replace(r"[+]$","",regex=True).str.strip()
+    else:
+        x.columns=[str(c).replace("\xa0"," ").strip() for c in x.columns]
+    for i in range(min(3,x.shape[1])):
+        x.iloc[:,i]=x.iloc[:,i].astype(str).str.replace("\xa0"," ",regex=False).str.replace(r"[+]$","",regex=True).str.strip()
     return x
 
 def _norm_label(v):
-    return re.sub(r"\s+"," ",re.sub(r"[^a-z0-9 ]+"," ",str(v).lower())).strip()
+    s=str(v).replace("\xa0"," ").lower()
+    return re.sub(r"\s+"," ",re.sub(r"[^a-z0-9 ]+"," ",s)).strip()
+
+def _label_match(v, labels):
+    a=_norm_label(v)
+    return any(a==b or a.startswith(b) or b.startswith(a) for b in labels)
 
 def _find_table(tables, labels):
     labels={_norm_label(x) for x in labels}
+    best=None
+    best_hits=0
     for t in tables:
         if t.empty: continue
         x=_flatten(t)
-        first=[_norm_label(v) for v in x.iloc[:,0].tolist()]
-        if any(any(a==b or a.startswith(b) or b.startswith(a) for b in labels) for a in first):
-            return x
-    return None
+        hits=0
+        for i in range(min(3,x.shape[1])):
+            hits += sum(_label_match(v,labels) for v in x.iloc[:,i].tolist())
+        if hits>best_hits:
+            best=x; best_hits=hits
+    return best if best_hits else None
 
 def _row(table, label):
-    if table is None: return None
+    if table is None or table.empty: return None
     target=_norm_label(label)
-    first=table.iloc[:,0].map(_norm_label)
-    mask=first.map(lambda x: x==target or x.startswith(target) or target.startswith(x))
-    q=table[mask]
-    return q.iloc[0] if not q.empty else None
+    for i in range(min(3,table.shape[1])):
+        col=table.iloc[:,i].map(_norm_label)
+        mask=col.map(lambda x: x==target or x.startswith(target) or target.startswith(x))
+        q=table[mask]
+        if not q.empty: return q.iloc[0]
+    return None
 
 def _annual_facts(symbol, html, as_of):
     try: tables=pd.read_html(html)
-    except: return []
+    except Exception: return []
     pl=_find_table(tables,{"sales","net profit","eps in rs"})
     bs=_find_table(tables,{"borrowings","equity capital","reserves"})
     cf=_find_table(tables,{"cash from operating activity","free cash flow"})
@@ -95,6 +112,7 @@ class ScreenerFundamentals:
         self.s=requests.Session()
         self.s.headers.update({"User-Agent":"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/131 Safari/537.36",
                                "Accept":"text/html,application/xhtml+xml"})
+
     def one(self,symbol,as_of):
         try:
             u=BASE+symbol+"/consolidated/"
@@ -103,13 +121,15 @@ class ScreenerFundamentals:
                 u=BASE+symbol+"/"
                 r=self.s.get(u,timeout=20)
             if r.ok: return _annual_facts(symbol,r.text,as_of)
-        except: pass
+        except Exception:
+            pass
         return []
+
     def batch(self,symbols,as_of):
         out=[]
         with ThreadPoolExecutor(max_workers=self.workers) as ex:
             fut={ex.submit(self.one,s,as_of):s for s in symbols}
             for f in as_completed(fut):
                 try: out.extend(f.result())
-                except: pass
+                except Exception: pass
         return out
