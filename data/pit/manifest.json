@@ -1,6 +1,6 @@
 {
   "as_of": "2026-10-01",
-  "facts_observed": 42079,
+  "facts_observed": 45019,
   "months": [
     "2025-04.jsonl",
     "2025-05.jsonl",
@@ -17,7 +17,8 @@
     "2026-06.jsonl",
     "2026-07.jsonl",
     "2026-08.jsonl",
-    "2026-09.jsonl"
+    "2026-09.jsonl",
+    "2026-10.jsonl"
   ],
   "pit_rule": "available_at <= as_of",
   "source": "NSE_XBRL",
