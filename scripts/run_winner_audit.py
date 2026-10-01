@@ -2,7 +2,8 @@ import json, os
 import duckdb
 import pandas as pd
 from core.market_data import nse_cross_section
-from core.nse_fundamentals import NSEFundamentals
+from core.nse_pit import NSEPIT
+from core.pit_store import load_facts
 from core.catalyst import NSECatalyst, ScreenerCatalyst, catalyst_score
 from multibagger.modules import score_fundamentals
 from multibagger.early_inflection import score_early_inflection
@@ -60,8 +61,23 @@ def audit_date(as_of):
     px["trend_score"]=rank63*.25+rank126*.35+rank252*.40
     target=px[px.symbol.isin(WINNERS)].copy()
     if target.empty:return []
-    facts=NSEFundamentals(workers=6).batch(target.symbol.tolist(),as_of)
-    fs=score_fundamentals(target,facts)
+    facts_df=load_facts(as_of)
+    facts=facts_df[facts_df.symbol.isin(target.symbol)] if not facts_df.empty else pd.DataFrame()
+    pit_symbols=set(facts.symbol.astype(str).unique()) if not facts.empty else set()
+    missing=[s for s in target.symbol.astype(str).tolist() if s not in pit_symbols]
+    if missing:
+        try:
+            dyn=NSEPIT()
+            rows=[]
+            for s in missing:
+                try: rows.extend(dyn.facts(s,as_of) or [])
+                except Exception: pass
+            if rows:
+                dyn_df=pd.DataFrame(rows)
+                facts=pd.concat([facts,dyn_df],ignore_index=True) if not facts.empty else dyn_df
+        except Exception:
+            pass
+    fs=score_fundamentals(target,facts.to_dict(orient="records") if isinstance(facts,pd.DataFrame) else facts)
     cats=NSECatalyst(workers=6).batch(target.symbol.tolist(),as_of)
     source="NSE"
     if not cats:
@@ -83,7 +99,8 @@ def audit_date(as_of):
         return z[["decision_date","symbol","name","trend_score","fundamental_score","fundamental_evidence","catalyst_score","early_inflection_score","early_stage","event_only_watch","status"]].to_dict("records")
     z=target.merge(fs,on="symbol",how="left")
     z["catalyst_score"]=z.symbol.map(lambda s:catalyst_score(catmap.get(s,[])))
-    z["fundamental_score"]=z[["valuation_gap","earnings_acceleration","cash_conversion","reinvestment_roic","governance_balance_sheet"]].mean(axis=1,skipna=False)
+    z["fundamental_score"]=z[["valuation_gap","earnings_acceleration","cash_conversion","reinvestment_roic","governance_balance_sheet"]].mean(axis=1,skipna=True)
+    z["fundamental_module_count"]=z[["valuation_gap","earnings_acceleration","cash_conversion","reinvestment_roic","governance_balance_sheet"]].notna().sum(axis=1)
     ei=score_early_inflection(z,z,catmap)
     for c in ["earnings_inflection","operating_leverage","order_visibility","capacity_inflection","structural_theme","early_inflection_score","early_stage"]:
         z[c]=ei[c].values
@@ -91,7 +108,7 @@ def audit_date(as_of):
     z["early_watch"]=z.early_inflection_score.ge(65)&z.fundamental_evidence.ge(.50)&z.trap_firewall_pass
     z["promoted"]=z.early_inflection_score.ge(70)&z.fundamental_score.ge(65)&z.catalyst_score.ge(55)&z.fundamental_evidence.ge(.75)&z.trap_firewall_pass&z.trend_score.ge(45)
     z["decision_date"]=as_of;z["name"]=z.symbol.map(WINNERS);z["catalyst_source"]=source
-    return z[["decision_date","symbol","name","trend_score","fundamental_score","fundamental_evidence","catalyst_score","earnings_inflection","operating_leverage","order_visibility","capacity_inflection","structural_theme","early_inflection_score","early_stage","early_watch","promoted"]].to_dict("records")
+    return z[["decision_date","symbol","name","trend_score","fundamental_score","fundamental_module_count","fundamental_evidence","catalyst_score","earnings_inflection","operating_leverage","order_visibility","capacity_inflection","structural_theme","early_inflection_score","early_stage","early_watch","promoted"]].to_dict("records")
 
 def main():
     rows=[]
