@@ -10,13 +10,12 @@ from multibagger.modules import score_fundamentals
 from multibagger.early_inflection import score_early_inflection
 from multibagger.firewall import apply_trap_firewall
 
-VERSION="4.3.1-scanner-funnel-mbe-catalyst-pit-discovery"
+VERSION="4.4.0-early-entry-fundamental-repair"
 
 def _pct(s):
     return s.rank(pct=True)*100
 
 def _ingest_missing_pit(symbols, as_of, workers=6):
-    """Fetch PIT facts for the actual discovery set, not just a pre-ranked market-data subset."""
     symbols=[str(s).upper() for s in symbols if str(s).strip()]
     if not symbols:
         return []
@@ -51,6 +50,18 @@ def run(as_of:str):
     n_discovery=min(max(100,int(max(1,n_scanner)*0.15)),500)
     discovery=eligible.sort_values(["discovery_score","scanner_score"],ascending=False).head(n_discovery).copy()
 
+    # Explicit early-entry gate: stocks with >50% six-month appreciation are not
+    # eligible for the final investible bucket. Recent acceleration can still qualify
+    # if the six-month move remains <=50%.
+    max_6m=float(os.getenv("MBE_MAX_6M_RETURN","0.50"))
+    discovery["six_month_return"]=discovery["ret_126d"]
+    discovery["six_month_runup_pass"]=discovery["ret_126d"].le(max_6m)
+    discovery["entry_stage"]=discovery["ret_126d"].apply(
+        lambda x: "EARLY" if pd.notna(x) and x<=0.25 else
+                  "EARLY_ACCELERATING" if pd.notna(x) and x<=0.50 else
+                  "ESTABLISHED" if pd.notna(x) and x<=1.00 else "MATURE"
+    )
+
     pit=load_facts(as_of)
     pit_stats=pit_coverage(pit)
     pit_facts=pit[pit.symbol.isin(discovery.symbol)] if not pit.empty else pd.DataFrame()
@@ -64,15 +75,13 @@ def run(as_of:str):
         pit_symbols.update(str(r.get("symbol")) for r in dynamic_pit_records if r.get("symbol"))
 
     public_records=[]
-    public_status="NOT_USED"
     remaining_missing=[s for s in discovery.symbol.astype(str).tolist() if s not in pit_symbols]
     if remaining_missing:
         try:
             from core.screener_fundamentals import ScreenerFundamentals
             public_records=ScreenerFundamentals(workers=8).batch(remaining_missing,as_of)
-            public_status="SCREENER_PUBLIC_FALLBACK_NON_PIT" if public_records else "PUBLIC_FALLBACK_EMPTY"
         except Exception:
-            public_status="PUBLIC_FALLBACK_ERROR"
+            public_records=[]
 
     records=pit_records+public_records
     source_symbols=set(str(r.get("symbol")) for r in public_records)
@@ -89,12 +98,22 @@ def run(as_of:str):
 
     fs=score_fundamentals(discovery,records)
     discovery=discovery.merge(fs,on="symbol",how="left")
-    discovery["fundamental_score"]=discovery[["valuation_gap","earnings_acceleration","cash_conversion","reinvestment_roic","governance_balance_sheet"]].mean(axis=1,skipna=False)
+
+    # Evidence-weighted fundamental score: missing individual modules are ignored,
+    # never converted into a zero. Evidence remains visible and promotion stays strict.
+    modules=["valuation_gap","earnings_acceleration","cash_conversion","reinvestment_roic","governance_balance_sheet"]
+    discovery["fundamental_score"]=discovery[modules].mean(axis=1,skipna=True)
+    discovery["fundamental_module_count"]=discovery[modules].notna().sum(axis=1)
     discovery["pit_verified"]=discovery.symbol.astype(str).isin(pit_symbols)
 
+    # MBE may inspect candidates with >=3/5 modules and evidence >=0.45.
+    # Promotion later requires >=0.75 evidence, so this does not weaken the final gate.
     n_fundamental=min(max(30,int(len(discovery)*0.20)),200)
-    fundamental_pool=discovery[discovery.fundamental_score.notna()&discovery.fundamental_evidence.ge(.50)].sort_values(
-        ["fundamental_score","fundamental_evidence","discovery_score"],ascending=False).head(n_fundamental).copy()
+    fundamental_pool=discovery[
+        discovery.fundamental_score.notna() &
+        discovery.fundamental_module_count.ge(3) &
+        discovery.fundamental_evidence.ge(.45)
+    ].sort_values(["fundamental_score","fundamental_evidence","discovery_score"],ascending=False).head(n_fundamental).copy()
 
     if fundamental_pool.empty:
         return {"engine":"Multibagger","version":VERSION,"as_of_requested":as_of,"status":"LIVE_SCAN_COMPLETE",
@@ -129,17 +148,29 @@ def run(as_of:str):
     for c in ["order_visibility","capacity_inflection","structural_theme","early_inflection_score","early_stage"]:
         if c in ei_final: mbe_pool[c]=ei_final[c].values
 
-    final=mbe_pool[mbe_pool.trap_firewall_pass&mbe_pool.catalyst_score.ge(55)].sort_values(
-        ["catalyst_score","mbe_score","fundamental_score"],ascending=False).head(8).copy()
+    # Final candidates must also pass the explicit six-month early-entry firewall.
+    final=mbe_pool[
+        mbe_pool.trap_firewall_pass &
+        mbe_pool.catalyst_score.ge(55) &
+        mbe_pool.six_month_runup_pass
+    ].sort_values(["catalyst_score","mbe_score","fundamental_score"],ascending=False).head(8).copy()
 
-    promoted=final[final.mbe_score.ge(65)&final.fundamental_score.ge(60)&final.fundamental_evidence.ge(.75)&
-                   final.catalyst_score.ge(60)&final.trap_firewall_pass&final.pit_verified].copy()
+    promoted=final[
+        final.mbe_score.ge(65) &
+        final.fundamental_score.ge(60) &
+        final.fundamental_evidence.ge(.75) &
+        final.catalyst_score.ge(60) &
+        final.trap_firewall_pass &
+        final.pit_verified &
+        final.six_month_runup_pass
+    ].copy()
 
     cols=[c for c in ["symbol","name","close","ret_21d","ret_63d","ret_126d","ret_252d",
+        "six_month_return","six_month_runup_pass","entry_stage",
         "chartink_hit","screener_hit","scanner_score","early_momentum_score","discovery_score",
-        "fundamental_score","fundamental_evidence","pit_verified","mbe_score","catalyst_score",
-        "earnings_inflection","order_visibility","capacity_inflection","structural_theme",
-        "early_inflection_score","early_stage","trap_flags","trap_firewall_pass"] if c in final.columns]
+        "fundamental_score","fundamental_module_count","fundamental_evidence","period_coverage","pit_verified",
+        "mbe_score","catalyst_score","earnings_inflection","order_visibility","capacity_inflection",
+        "structural_theme","early_inflection_score","early_stage","trap_flags","trap_firewall_pass"] if c in final.columns]
 
     return {"engine":"Multibagger","version":VERSION,"as_of_requested":as_of,
             "data_date":str(df.data_date.max())[:10],"status":"LIVE_SCAN_COMPLETE",
@@ -148,6 +179,7 @@ def run(as_of:str):
             "mbe_pool":int(len(mbe_pool)),"final_shortlist":int(len(final)),
             "fundamental_facts":int(len(records)),"fundamental_data_status":source_status,
             "public_fallback_symbols":int(len(source_symbols)),"pit_verified_discovery_symbols":int(len(pit_symbols)),
+            "six_month_rule":"Final/promotion candidates require ret_126d <= configured MBE_MAX_6M_RETURN (default 50%)",
             "scanner_status":scanner_status,
             "pit_rule":"Only facts with NSE exchange availability/broadcast timestamp <= as_of are PIT eligible",
             "pit_coverage":pit_stats,"catalyst_data_status":"NSE_CORPORATE_ANNOUNCEMENTS_FINALIST_ONLY",
