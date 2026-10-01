@@ -10,7 +10,7 @@ from multibagger.modules import score_fundamentals
 from multibagger.early_inflection import score_early_inflection
 from multibagger.firewall import apply_trap_firewall
 
-VERSION="4.4.0-early-entry-fundamental-repair"
+VERSION="4.5.0-gate-audit"
 
 def _pct(s):
     return s.rank(pct=True)*100
@@ -149,10 +149,34 @@ def run(as_of:str):
         if c in ei_final: mbe_pool[c]=ei_final[c].values
 
     # Final candidates must also pass the explicit six-month early-entry firewall.
-    final=mbe_pool[
-        mbe_pool.trap_firewall_pass &
+    # Keep a full gate-audit table for every MBE-stage name so a zero-final result
+    # is diagnosable rather than opaque.
+    mbe_pool["gate_mbe_pass"]=mbe_pool.mbe_score.ge(65)
+    mbe_pool["gate_fundamental_pass"]=mbe_pool.fundamental_score.ge(60)
+    mbe_pool["gate_evidence_pass"]=mbe_pool.fundamental_evidence.ge(.75)
+    mbe_pool["gate_catalyst_pass"]=mbe_pool.catalyst_score.ge(60)
+    mbe_pool["gate_trap_pass"]=mbe_pool.trap_firewall_pass
+    mbe_pool["gate_pit_pass"]=mbe_pool.pit_verified
+    mbe_pool["gate_6m_pass"]=mbe_pool.six_month_runup_pass
+    mbe_pool["gate_final_eligibility"]=(
+        mbe_pool.gate_trap_pass &
         mbe_pool.catalyst_score.ge(55) &
-        mbe_pool.six_month_runup_pass
+        mbe_pool.gate_6m_pass
+    )
+    def _rejection(r):
+        fails=[]
+        if not bool(r.gate_trap_pass): fails.append("TRAP_FIREWALL")
+        if not bool(r.gate_6m_pass): fails.append("6M_RUNUP")
+        if float(r.catalyst_score) < 55: fails.append("CATALYST")
+        if float(r.mbe_score) < 65: fails.append("MBE_SCORE")
+        if float(r.fundamental_score) < 60: fails.append("FUNDAMENTAL_SCORE")
+        if float(r.fundamental_evidence) < .75: fails.append("EVIDENCE")
+        if not bool(r.pit_verified): fails.append("PIT")
+        return "|".join(fails) if fails else "NONE"
+    mbe_pool["primary_rejection_reason"]=mbe_pool.apply(_rejection,axis=1)
+
+    final=mbe_pool[
+        mbe_pool.gate_final_eligibility
     ].sort_values(["catalyst_score","mbe_score","fundamental_score"],ascending=False).head(8).copy()
 
     promoted=final[
@@ -189,4 +213,5 @@ def run(as_of:str):
                      "fundamental":int(len(fundamental_pool)),"mbe":int(len(mbe_pool)),"catalyst_finalists":int(len(final))},
             "final_candidates":final[cols].to_dict(orient="records"),
             "promoted_candidates":promoted[cols].to_dict(orient="records"),
+            "mbe_gate_audit":mbe_pool[[c for c in ["symbol","name","close","ret_21d","ret_63d","ret_126d","entry_stage","fundamental_score","fundamental_evidence","mbe_score","catalyst_score","pit_verified","trap_firewall_pass","trap_flags","gate_mbe_pass","gate_fundamental_pass","gate_evidence_pass","gate_catalyst_pass","gate_trap_pass","gate_pit_pass","gate_6m_pass","gate_final_eligibility","primary_rejection_reason","order_visibility","capacity_inflection","structural_theme","early_inflection_score","early_stage"] if c in mbe_pool.columns]].to_dict(orient="records"),
             "validation_status":"CURRENT_LIVE_DISCOVERY; PIT_PROMOTION_ONLY; HISTORICAL_WINNER_AUDIT_SEPARATE"}
