@@ -225,6 +225,16 @@ def audit_date(as_of):
         ) else "SCREENER_NON_PIT"
     )
 
+    # Production recalculates early-inflection after catalyst evidence is attached.
+    # Reproduce that step so early_watch/early_stage are based on the same fields.
+    ei_final=score_early_inflection(mbe_pool,mbe_pool,catmap)
+    for c in [
+        "order_visibility","capacity_inflection","structural_theme",
+        "early_inflection_score","early_stage"
+    ]:
+        if c in ei_final:
+            mbe_pool[c]=ei_final[c].values
+
     mbe_pool["six_month_return"]=mbe_pool["ret_126d"]
     mbe_pool["entry_stage"]=mbe_pool["ret_126d"].apply(
         lambda x:"EARLY" if pd.notna(x) and x<=0.25 else
