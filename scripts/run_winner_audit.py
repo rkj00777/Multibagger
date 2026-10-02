@@ -264,6 +264,7 @@ def audit_date(as_of):
         drow=target_discovery[target_discovery.symbol==sym]
         frow=fundamental_pool[fundamental_pool.symbol==sym]
         mrow=mbe_pool[mbe_pool.symbol==sym]
+        fbrow=all_targets[all_targets.symbol==sym] if "all_targets" in locals() and not all_targets.empty else pd.DataFrame()
         base={}
         if not srow.empty:
             base.update(srow.iloc[0].to_dict())
@@ -292,7 +293,20 @@ def audit_date(as_of):
             base["fundamental_rank"]=None
         if not mrow.empty:
             base.update(mrow.iloc[0].to_dict())
+        if not fbrow.empty:
+            fr=fbrow.iloc[0]
+            base.update({
+                "diagnostic_mbe_score":fr.get("diagnostic_mbe_score"),
+                "diagnostic_mbe_stage":fr.get("diagnostic_mbe_stage"),
+                "diagnostic_6m_return":fr.get("diagnostic_6m_return"),
+                "diagnostic_only":not bool(base.get("mbe_pool_selected",False)),
+            })
         else:
+            base.setdefault("diagnostic_mbe_score",None)
+            base.setdefault("diagnostic_mbe_stage",None)
+            base.setdefault("diagnostic_6m_return",None)
+            base.setdefault("diagnostic_only",True)
+        if mrow.empty:
             for c in [
                 "fundamental_score","fundamental_module_count",
                 "fundamental_evidence","pit_verified","mbe_score",
@@ -335,6 +349,10 @@ def audit_date(as_of):
             "early_stage":base.get("early_stage"),
             "early_watch":base.get("early_watch"),
             "production_mbe_gate":base.get("production_mbe_gate"),
+            "diagnostic_mbe_score":base.get("diagnostic_mbe_score"),
+            "diagnostic_mbe_stage":base.get("diagnostic_mbe_stage"),
+            "diagnostic_6m_return":base.get("diagnostic_6m_return"),
+            "diagnostic_only":base.get("diagnostic_only"),
         })
     return rows
 
