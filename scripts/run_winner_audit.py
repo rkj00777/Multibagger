@@ -100,6 +100,19 @@ def audit_date(as_of):
     fs=score_fundamentals(target,facts.to_dict(orient="records") if isinstance(facts,pd.DataFrame) else facts)
     z=target.merge(fs,on="symbol",how="left") if not fs.empty else target.copy()
 
+    # Recreate the production cross-sectional trend feature required by the
+    # early-inflection module. The historical audit previously passed only the
+    # winner subset, which omitted trend_score and caused the audit to abort.
+    # Percentiles are calculated against the full PIT market cross-section.
+    def _pct(s):
+        return s.rank(pct=True)*100
+    z["trend_score"]=(
+        _pct(pd.to_numeric(px["ret_63d"],errors="coerce").fillna(-1e9)) * .25 +
+        _pct(pd.to_numeric(px["ret_126d"],errors="coerce").fillna(-1e9)) * .35 +
+        _pct(pd.to_numeric(px["ret_252d"],errors="coerce").fillna(-1e9)) * .40
+    ).reindex(z.index)
+    z["discovery_score"]=z["trend_score"]
+
     modules=["valuation_gap","earnings_acceleration","cash_conversion","reinvestment_roic","governance_balance_sheet"]
     for c in modules:
         if c not in z:z[c]=float("nan")
