@@ -66,103 +66,296 @@ def threshold_dates():
     return pd.DataFrame(out)
 
 def audit_date(as_of):
+    # Reproduce the production pipeline exactly through the MBE stage, then
+    # extract the historical winners. This is deliberately NOT a winner-only
+    # calculation: percentile ranks and top-N selection must be formed from the
+    # full historical cross-section to avoid giving winners artificial scores.
     px=nse_cross_section(as_of)
-    if px.empty:return []
+    if px.empty:
+        return []
     for c in ["ret_21d","ret_63d","ret_126d","ret_252d","avg_turnover_60d","pct_off_high"]:
         px[c]=pd.to_numeric(px.get(c),errors="coerce")
-    # Recreate production trend/discovery context across the full screened universe.
-    # Percentile ranks must not be computed on the historical winners alone.
-    screened,_=build_scanner_funnel(px)
-    if screened.empty:return []
-    screened["trend_score"]=screened.ret_63d.fillna(-1e9).rank(pct=True)*100*.25 + screened.ret_126d.fillna(-1e9).rank(pct=True)*100*.35 + screened.ret_252d.fillna(-1e9).rank(pct=True)*100*.40
-    screened["liquidity_score"]=screened.avg_turnover_60d.fillna(0).rank(pct=True)*100
-    screened["early_momentum_score"]=screened.ret_21d.fillna(-1e9).rank(pct=True)*100*.50 + screened.ret_63d.fillna(-1e9).rank(pct=True)*100*.30 + screened.ret_126d.fillna(-1e9).rank(pct=True)*100*.20
-    screened["discovery_score"]=screened.scanner_score*.45+screened.early_momentum_score*.35+screened.liquidity_score*.20
-    target=screened[screened.symbol.isin(WINNERS)].copy()
-    if target.empty:return []
 
+    screened,_=build_scanner_funnel(px)
+    if screened.empty:
+        return []
+
+    def pct(s):
+        return s.rank(pct=True)*100
+
+    screened["trend_score"]=(
+        pct(screened.ret_63d.fillna(-1e9))*.25+
+        pct(screened.ret_126d.fillna(-1e9))*.35+
+        pct(screened.ret_252d.fillna(-1e9))*.40
+    )
+    screened["liquidity_score"]=pct(screened.avg_turnover_60d.fillna(0))
+    screened["early_momentum_score"]=(
+        pct(screened.ret_21d.fillna(-1e9))*.50+
+        pct(screened.ret_63d.fillna(-1e9))*.30+
+        pct(screened.ret_126d.fillna(-1e9))*.20
+    )
+    screened["discovery_score"]=(
+        screened.scanner_score*.45+
+        screened.early_momentum_score*.35+
+        screened.liquidity_score*.20
+    )
+
+    eligible=screened[
+        (screened.avg_turnover_60d>=2_000_000)&screened.ret_63d.notna()
+    ].copy()
+    n_scanner=len(screened)
+    n_discovery=min(max(100,int(max(1,n_scanner)*0.15)),500)
+    discovery=eligible.sort_values(
+        ["discovery_score","scanner_score"],ascending=False
+    ).head(n_discovery).copy()
+
+    discovery["six_month_return"]=discovery["ret_126d"]
+    discovery["six_month_runup_pass"]=discovery["ret_126d"].le(.50)
+    discovery["entry_stage"]=discovery["ret_126d"].apply(
+        lambda x:"EARLY" if pd.notna(x) and x<=0.25 else
+                  "EARLY_ACCELERATING" if pd.notna(x) and x<=0.50 else
+                  "ESTABLISHED" if pd.notna(x) and x<=1.00 else "MATURE"
+    )
+    discovery["discovery_rank"]=range(1,len(discovery)+1)
+
+    winner_symbols=set(WINNERS)
+    target_screened=screened[screened.symbol.isin(winner_symbols)].copy()
+    target_discovery=discovery[discovery.symbol.isin(winner_symbols)].copy()
+
+    # Historical PIT fundamentals are authoritative. Dynamic NSE PIT is used
+    # only to fill missing PIT symbols; public current fundamentals are never
+    # substituted in this historical validation.
     facts_df=load_facts(as_of)
-    facts=facts_df[facts_df.symbol.isin(target.symbol)] if not facts_df.empty else pd.DataFrame()
+    facts=facts_df[
+        facts_df.symbol.isin(discovery.symbol)
+    ] if not facts_df.empty else pd.DataFrame()
     pit_symbols=set(facts.symbol.astype(str).unique()) if not facts.empty else set()
-    missing=[s for s in target.symbol.astype(str).tolist() if s not in pit_symbols]
+
+    missing=[
+        s for s in discovery.symbol.astype(str).tolist()
+        if s not in pit_symbols
+    ]
     if missing:
         try:
             dyn=NSEPIT()
             rows=[]
             for s in missing:
-                try: rows.extend(dyn.facts(s,as_of) or [])
-                except Exception: pass
+                try:
+                    rows.extend(dyn.facts(s,as_of) or [])
+                except Exception:
+                    pass
             if rows:
                 dyn_df=pd.DataFrame(rows)
                 facts=pd.concat([facts,dyn_df],ignore_index=True) if not facts.empty else dyn_df
-        except Exception: pass
+                pit_symbols.update(dyn_df.symbol.astype(str).unique())
+        except Exception:
+            pass
 
-    fs=score_fundamentals(target,facts.to_dict(orient="records") if isinstance(facts,pd.DataFrame) else facts)
-    z=target.merge(fs,on="symbol",how="left") if not fs.empty else target.copy()
+    records=facts.to_dict(orient="records") if not facts.empty else []
+    fs=score_fundamentals(discovery,records) if records else pd.DataFrame()
+    discovery=discovery.merge(fs,on="symbol",how="left") if not fs.empty else discovery.copy()
 
-    # Recreate the production cross-sectional trend feature required by the
-    # early-inflection module. The historical audit previously passed only the
-    # winner subset, which omitted trend_score and caused the audit to abort.
-    # Percentiles are calculated against the full PIT market cross-section.
-    def _pct(s):
-        return s.rank(pct=True)*100
-    z["trend_score"]=(
-        _pct(pd.to_numeric(px["ret_63d"],errors="coerce").fillna(-1e9)) * .25 +
-        _pct(pd.to_numeric(px["ret_126d"],errors="coerce").fillna(-1e9)) * .35 +
-        _pct(pd.to_numeric(px["ret_252d"],errors="coerce").fillna(-1e9)) * .40
-    ).reindex(z.index)
-    z["discovery_score"]=z["trend_score"]
-
-    modules=["valuation_gap","earnings_acceleration","cash_conversion","reinvestment_roic","governance_balance_sheet"]
+    modules=[
+        "valuation_gap","earnings_acceleration","cash_conversion",
+        "reinvestment_roic","governance_balance_sheet"
+    ]
     for c in modules:
-        if c not in z:z[c]=float("nan")
-    z["fundamental_score"]=z[modules].mean(axis=1,skipna=True)
-    z["fundamental_module_count"]=z[modules].notna().sum(axis=1)
-    z["pit_verified"]=z.symbol.astype(str).isin(pit_symbols)
+        if c not in discovery:
+            discovery[c]=float("nan")
+    discovery["fundamental_score"]=discovery[modules].mean(axis=1,skipna=True)
+    discovery["fundamental_module_count"]=discovery[modules].notna().sum(axis=1)
+    discovery["pit_verified"]=discovery.symbol.astype(str).isin(pit_symbols)
 
-    # Reproduce the production MBE calculation at the historical checkpoint.
-    ei=score_early_inflection(z,z,{})
-    for c in ["earnings_inflection","operating_leverage","cash_inflection","balance_sheet_runway"]:
-        if c in ei:z[c]=ei[c].values
-    z=score_mbe_core(z)
+    # Exact production fundamental gate/pool sizing.
+    n_fundamental=min(max(30,int(len(discovery)*0.20)),200)
+    fundamental_pool=discovery[
+        discovery.fundamental_score.notna()&
+        discovery.fundamental_module_count.ge(3)&
+        discovery.fundamental_evidence.ge(.45)
+    ].sort_values(
+        ["fundamental_score","fundamental_evidence","discovery_score"],
+        ascending=False
+    ).head(n_fundamental).copy()
 
-    # Historical maturity/entry classification is diagnostic only.
-    z["six_month_return"]=z["ret_126d"]
-    z["entry_stage"]=z["ret_126d"].apply(
+    if fundamental_pool.empty:
+        return _audit_rows_without_mbe(
+            as_of,target_screened,target_discovery,discovery
+        )
+
+    # Production early-inflection and MBE calculations operate on the full
+    # fundamental pool, not on historical winners alone.
+    ei=score_early_inflection(fundamental_pool,fundamental_pool,{})
+    for c in [
+        "earnings_inflection","operating_leverage",
+        "cash_inflection","balance_sheet_runway"
+    ]:
+        if c in ei:
+            fundamental_pool[c]=ei[c].values
+
+    fundamental_pool=score_mbe_core(fundamental_pool)
+    pre=apply_trap_firewall(fundamental_pool)
+    fundamental_pool["trap_flags"]=pre["trap_flags"]
+    fundamental_pool["trap_firewall_pass"]=pre["trap_firewall_pass"]
+
+    n_mbe=min(max(10,int(len(fundamental_pool)*0.40)),100)
+    mbe_pool=fundamental_pool.sort_values(
+        ["trap_firewall_pass","mbe_score"],ascending=False
+    ).head(n_mbe).copy()
+    mbe_pool["mbe_rank"]=range(1,len(mbe_pool)+1)
+
+    # Catalyst is reported only for names that actually reach the production
+    # MBE pool. It is not allowed to alter the historical MBE score.
+    catmap={}
+    try:
+        cats=NSECatalyst(workers=4).batch(mbe_pool.symbol.tolist(),as_of)
+        for item in cats:
+            sym=item.get("symbol") or item.get("sym")
+            if sym:
+                catmap.setdefault(sym,[]).append(item)
+    except Exception:
+        pass
+    mbe_pool["catalyst_score"]=mbe_pool.symbol.map(
+        lambda s:catalyst_score(catmap.get(s,[]))
+    )
+    mbe_pool["catalyst_source"]=mbe_pool.symbol.map(
+        lambda s:
+        "NSE_PIT" if any(
+            i.get("source_type")=="NSE_CORPORATE_ANNOUNCEMENT"
+            for i in catmap.get(s,[])
+        ) else "SCREENER_NON_PIT"
+    )
+
+    mbe_pool["six_month_return"]=mbe_pool["ret_126d"]
+    mbe_pool["entry_stage"]=mbe_pool["ret_126d"].apply(
         lambda x:"EARLY" if pd.notna(x) and x<=0.25 else
                   "EARLY_ACCELERATING" if pd.notna(x) and x<=0.50 else
                   "ESTABLISHED" if pd.notna(x) and x<=1.00 else "MATURE"
     )
-    z=apply_trap_firewall(z)
-
-    # Catalyst is reported separately. If NSE is unavailable, Screener is
-    # explicitly labelled NON-PIT and never used to claim historical MBE validity.
-    cats=NSECatalyst(workers=4).batch(z.symbol.tolist(),as_of)
-    catmap={}
-    for x in cats:
-        sym=x.get("symbol") or x.get("sym")
-        if sym:catmap.setdefault(sym,[]).append(x)
-    z["catalyst_score"]=z.symbol.map(lambda s:catalyst_score(catmap.get(s,[])))
-    z["catalyst_source"]=z.symbol.map(lambda s:
-        "NSE_PIT" if any(i.get("source_type")=="NSE_CORPORATE_ANNOUNCEMENT" for i in catmap.get(s,[]))
-        else "SCREENER_NON_PIT"
+    mbe_pool["early_watch"]=(
+        mbe_pool.early_inflection_score.ge(65)&
+        mbe_pool.fundamental_evidence.ge(.50)&
+        mbe_pool.trap_firewall_pass
+    )
+    mbe_pool["production_mbe_gate"]=(
+        mbe_pool.mbe_score.ge(65)&
+        mbe_pool.fundamental_score.ge(60)&
+        mbe_pool.fundamental_evidence.ge(.75)&
+        mbe_pool.trap_firewall_pass&
+        mbe_pool.pit_verified&
+        mbe_pool.six_month_return.le(.50)
     )
 
-    z["decision_date"]=as_of
-    z["name"]=z.symbol.map(WINNERS)
-    z["early_watch"]=z.early_inflection_score.ge(65)&z.fundamental_evidence.ge(.50)&z.trap_firewall_pass
-    z["production_mbe_gate"]=(
-        z.mbe_score.ge(65)&z.fundamental_score.ge(60)&
-        z.fundamental_evidence.ge(.75)&z.trap_firewall_pass&
-        z.pit_verified&z.six_month_return.le(.50)
-    )
-    cols=["decision_date","symbol","name","close","ret_21d","ret_63d","ret_126d",
-          "ret_252d","entry_stage","fundamental_score","fundamental_module_count",
-          "fundamental_evidence","pit_verified","mbe_score","mbe_stage",
-          "maturity_flag","maturity_penalty","catalyst_score","catalyst_source",
-          "earnings_inflection","operating_leverage","early_inflection_score",
-          "early_stage","early_watch","production_mbe_gate"]
-    return z[[c for c in cols if c in z.columns]].to_dict("records")
+    # Return every winner that was visible in the scanner, even if it never
+    # reached a later pool. That distinction is central to falsifying the
+    # "detected early" claim.
+    rows=[]
+    for sym,name in WINNERS.items():
+        srow=target_screened[target_screened.symbol==sym]
+        drow=target_discovery[target_discovery.symbol==sym]
+        frow=fundamental_pool[fundamental_pool.symbol==sym]
+        mrow=mbe_pool[mbe_pool.symbol==sym]
+        base={}
+        if not srow.empty:
+            base.update(srow.iloc[0].to_dict())
+        elif not drow.empty:
+            base.update(drow.iloc[0].to_dict())
+        base.update({
+            "decision_date":as_of,
+            "symbol":sym,
+            "name":name,
+            "screened":not srow.empty,
+            "discovery_selected":not drow.empty,
+            "fundamental_pool_selected":not frow.empty,
+            "mbe_pool_selected":not mrow.empty,
+        })
+        if not drow.empty:
+            base["discovery_rank"]=int(drow.iloc[0]["discovery_rank"])
+        else:
+            base["discovery_rank"]=None
+        if not frow.empty:
+            base["fundamental_rank"]=int(
+                fundamental_pool.reset_index(drop=True).index[
+                    fundamental_pool.reset_index(drop=True).symbol.eq(sym)
+                ][0]+1
+            )
+        else:
+            base["fundamental_rank"]=None
+        if not mrow.empty:
+            base.update(mrow.iloc[0].to_dict())
+        else:
+            for c in [
+                "fundamental_score","fundamental_module_count",
+                "fundamental_evidence","pit_verified","mbe_score",
+                "mbe_stage","maturity_flag","maturity_penalty",
+                "catalyst_score","catalyst_source","earnings_inflection",
+                "operating_leverage","early_inflection_score","early_stage",
+                "early_watch","production_mbe_gate","ret_21d","ret_63d",
+                "ret_126d","ret_252d","close","entry_stage"
+            ]:
+                base.setdefault(c,None)
+        rows.append({
+            "decision_date":as_of,
+            "symbol":sym,
+            "name":name,
+            "close":base.get("close"),
+            "ret_21d":base.get("ret_21d"),
+            "ret_63d":base.get("ret_63d"),
+            "ret_126d":base.get("ret_126d"),
+            "ret_252d":base.get("ret_252d"),
+            "entry_stage":base.get("entry_stage"),
+            "screened":base["screened"],
+            "discovery_selected":base["discovery_selected"],
+            "discovery_rank":base["discovery_rank"],
+            "fundamental_pool_selected":base["fundamental_pool_selected"],
+            "fundamental_rank":base["fundamental_rank"],
+            "mbe_pool_selected":base["mbe_pool_selected"],
+            "fundamental_score":base.get("fundamental_score"),
+            "fundamental_module_count":base.get("fundamental_module_count"),
+            "fundamental_evidence":base.get("fundamental_evidence"),
+            "pit_verified":base.get("pit_verified"),
+            "mbe_score":base.get("mbe_score"),
+            "mbe_stage":base.get("mbe_stage"),
+            "maturity_flag":base.get("maturity_flag"),
+            "maturity_penalty":base.get("maturity_penalty"),
+            "catalyst_score":base.get("catalyst_score"),
+            "catalyst_source":base.get("catalyst_source"),
+            "earnings_inflection":base.get("earnings_inflection"),
+            "operating_leverage":base.get("operating_leverage"),
+            "early_inflection_score":base.get("early_inflection_score"),
+            "early_stage":base.get("early_stage"),
+            "early_watch":base.get("early_watch"),
+            "production_mbe_gate":base.get("production_mbe_gate"),
+        })
+    return rows
+
+def _audit_rows_without_mbe(as_of,target_screened,target_discovery,discovery):
+    rows=[]
+    for sym,name in WINNERS.items():
+        srow=target_screened[target_screened.symbol==sym]
+        drow=target_discovery[target_discovery.symbol==sym]
+        rows.append({
+            "decision_date":as_of,"symbol":sym,"name":name,
+            "close":float(srow.iloc[0].close) if not srow.empty else None,
+            "ret_21d":float(srow.iloc[0].ret_21d) if not srow.empty else None,
+            "ret_63d":float(srow.iloc[0].ret_63d) if not srow.empty else None,
+            "ret_126d":float(srow.iloc[0].ret_126d) if not srow.empty else None,
+            "ret_252d":float(srow.iloc[0].ret_252d) if not srow.empty else None,
+            "entry_stage":None,
+            "screened":not srow.empty,
+            "discovery_selected":not drow.empty,
+            "discovery_rank":int(drow.iloc[0].discovery_rank) if not drow.empty else None,
+            "fundamental_pool_selected":False,
+            "fundamental_rank":None,
+            "mbe_pool_selected":False,
+            "fundamental_score":None,"fundamental_module_count":None,
+            "fundamental_evidence":None,"pit_verified":None,"mbe_score":None,
+            "mbe_stage":None,"maturity_flag":None,"maturity_penalty":None,
+            "catalyst_score":None,"catalyst_source":None,
+            "earnings_inflection":None,"operating_leverage":None,
+            "early_inflection_score":None,"early_stage":None,
+            "early_watch":False,"production_mbe_gate":False,
+        })
+    return rows
 
 def main():
     rows=[]
