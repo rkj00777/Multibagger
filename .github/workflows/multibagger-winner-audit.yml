@@ -2,7 +2,7 @@ name: Multibagger Winner Audit
 on:
   push:
     branches: [main]
-    paths: ["multibagger/**", "scripts/run_winner_audit.py", ".github/workflows/multibagger-winner-audit.yml"]
+    paths: ["multibagger/**", "core/initial_scanners.py", "scripts/run_winner_audit.py", ".github/workflows/multibagger-winner-audit.yml"]
   workflow_dispatch:
 jobs:
   audit:
