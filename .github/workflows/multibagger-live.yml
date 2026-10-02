@@ -5,6 +5,7 @@ on:
     paths:
       - "multibagger/**"
       - "core/market_data.py"
+      - "core/initial_scanners.py"
       - "scripts/run_live.py"
       - ".github/workflows/multibagger-live.yml"
   schedule:
