@@ -2,6 +2,7 @@ import json, os
 import duckdb
 import pandas as pd
 from core.market_data import nse_cross_section
+from core.initial_scanners import build_scanner_funnel
 from core.nse_pit import NSEPIT
 from core.pit_store import load_facts
 from core.catalyst import NSECatalyst, ScreenerCatalyst, catalyst_score
@@ -67,9 +68,17 @@ def threshold_dates():
 def audit_date(as_of):
     px=nse_cross_section(as_of)
     if px.empty:return []
-    for c in ["ret_21d","ret_63d","ret_126d","ret_252d","avg_turnover_60d"]:
-        px[c]=pd.to_numeric(px[c],errors="coerce")
-    target=px[px.symbol.isin(WINNERS)].copy()
+    for c in ["ret_21d","ret_63d","ret_126d","ret_252d","avg_turnover_60d","pct_off_high"]:
+        px[c]=pd.to_numeric(px.get(c),errors="coerce")
+    # Recreate production trend/discovery context across the full screened universe.
+    # Percentile ranks must not be computed on the historical winners alone.
+    screened,_=build_scanner_funnel(px)
+    if screened.empty:return []
+    screened["trend_score"]=screened.ret_63d.fillna(-1e9).rank(pct=True)*100*.25 + screened.ret_126d.fillna(-1e9).rank(pct=True)*100*.35 + screened.ret_252d.fillna(-1e9).rank(pct=True)*100*.40
+    screened["liquidity_score"]=screened.avg_turnover_60d.fillna(0).rank(pct=True)*100
+    screened["early_momentum_score"]=screened.ret_21d.fillna(-1e9).rank(pct=True)*100*.50 + screened.ret_63d.fillna(-1e9).rank(pct=True)*100*.30 + screened.ret_126d.fillna(-1e9).rank(pct=True)*100*.20
+    screened["discovery_score"]=screened.scanner_score*.45+screened.early_momentum_score*.35+screened.liquidity_score*.20
+    target=screened[screened.symbol.isin(WINNERS)].copy()
     if target.empty:return []
 
     facts_df=load_facts(as_of)
