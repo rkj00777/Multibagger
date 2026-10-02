@@ -1,0 +1,68 @@
+name: Multibagger PIT History Backfill
+
+on:
+  push:
+    paths:
+      - ".github/workflows/multibagger-pit-history-backfill.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: multibagger-pit-history-backfill
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  backfill-and-validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install -r requirements.txt
+
+      - name: Backfill historical PIT evidence
+        env:
+          PIT_WORKERS: "6"
+        run: |
+          set -euo pipefail
+          for AS_OF in \
+            2025-04-30 2025-05-31 2025-06-30 2025-07-31 2025-08-31 \
+            2025-09-30 2025-10-31 2025-11-30 2025-12-31
+          do
+            echo "=== PIT BACKFILL $AS_OF ==="
+            PYTHONPATH=. python scripts/ingest_pit.py --as-of "$AS_OF" --limit 300
+          done
+
+      - name: Persist historical PIT evidence
+        run: |
+          git config user.name "multibagger-bot"
+          git config user.email "multibagger-bot@users.noreply.github.com"
+          git add data/pit
+          if git diff --cached --quiet; then
+            echo "No new PIT evidence."
+          else
+            git commit -m "Backfill historical PIT evidence Apr-Dec 2025"
+            git push
+          fi
+
+      - name: Run expanded PIT validation
+        env:
+          VALIDATION_MONTHS: "2025-04-30,2025-05-31,2025-06-30,2025-07-31,2025-08-31,2025-09-30,2025-10-31,2025-11-30,2025-12-31"
+        run: |
+          PYTHONPATH=. python scripts/run_validation.py
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: multibagger-pit-history-validation
+          path: |
+            reports/multibagger-pit-validation.json
+            data/pit/manifest.json
