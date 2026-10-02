@@ -38,6 +38,10 @@ WINNERS = {
     "GBLINFRA":"Global Infratech & Finance",
     "MRUGESH":"Mrugesh Trading",
     "RAYMOND":"Raymond",
+    "TBZ":"Tribhovandas Bhimji Zaveri",
+    "MOREPENLAB":"Morepen Laboratories",
+    "SARAUTO":"SAR Auto Products",
+    "KABRAEXTRU":"Kabra Extrusiontechnik",
 }
 # Check before/around the historical run-up, not after it. The MBE score at a
 # checkpoint uses only data available at that checkpoint.
