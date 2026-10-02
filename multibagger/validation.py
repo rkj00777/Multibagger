@@ -32,7 +32,7 @@ def _spearman_permutation_p(x,y,n_perm=10000,seed=42):
     rng=np.random.default_rng(seed); ge=1
     for _ in range(n_perm):
         bp=rng.permutation(b); pc=float((ac*(bp-bp.mean())).sum()/denom) if denom else 0.0
-        if pc>=rho: ge+=1
+        if abs(pc)>=abs(rho): ge+=1
     return {"n":int(n),"rho":rho,"p_value":float(ge/(n_perm+1))}
 
 def _bh_fdr(pvals):
@@ -58,7 +58,7 @@ def _statistical_validation(out):
             tm=rng.choice(top.to_numpy(),len(top)).mean(); am=rng.choice(allr.to_numpy(),len(allr)).mean()
             if abs(am)>1e-12: vals.append(tm/am)
         if vals: lift={"mean":float(top.mean()/allr.mean()),"ci_low":float(np.quantile(vals,.025)),"ci_high":float(np.quantile(vals,.975))}
-    return {"bootstrap_iterations":10000,"top_quartile_mean_ci":_bootstrap_mean_ci(top,seed=101),"all_observations_mean_ci":_bootstrap_mean_ci(allr,seed=102),"selection_lift_ci":lift,"module_tests":tests,"fdr_method":"Benjamini-Hochberg","fdr_alpha":.05,"statistical_gate":"PASS" if any(t["fdr_significant"] for t in tests) else "NOT_PASSED"}
+    return {"bootstrap_iterations":10000,"top_quartile_mean_ci":_bootstrap_mean_ci(top,seed=101),"all_observations_mean_ci":_bootstrap_mean_ci(allr,seed=102),"selection_lift_ci":lift,"module_tests":tests,"fdr_method":"Benjamini-Hochberg","fdr_alpha":.05,"statistical_gate":"PASS" if any(t["fdr_significant"] for t in tests) else "NOT_PASSED","statistical_warning":"Exploratory unless sufficient independent decision dates are available; repeated symbol observations are not independent."}
 
 def validate(months,top_n=25):
     rows=[]
@@ -87,7 +87,7 @@ def validate(months,top_n=25):
         fr=forward_returns(fs.symbol.tolist(),as_of)
         z=fs.merge(fr,on="symbol",how="inner");z["fundamental_score"]=z[["valuation_gap","earnings_acceleration","cash_conversion","reinvestment_roic","governance_balance_sheet"]].mean(axis=1,skipna=True)
         z["fundamental_module_count"]=z[["valuation_gap","earnings_acceleration","cash_conversion","reinvestment_roic","governance_balance_sheet"]].notna().sum(axis=1)
-        z["decision_date"]=as_of;rows.extend(z[["decision_date","symbol","fundamental_score","fundamental_module_count","fundamental_evidence","forward_return"]].to_dict("records"))
+        z["decision_date"]=as_of; rows.extend(z[["decision_date","symbol","fundamental_score","fundamental_module_count","fundamental_evidence","forward_return","valuation_gap","earnings_acceleration","cash_conversion","reinvestment_roic","governance_balance_sheet"]].to_dict("records"))
     out=pd.DataFrame(rows)
     if out.empty:return {"status":"NO_VALIDATION_OBSERVATIONS"}
     q=out.fundamental_score.quantile(.75);top=out[out.fundamental_score>=q].forward_return.dropna();allr=out.forward_return.dropna()
