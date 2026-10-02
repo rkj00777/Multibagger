@@ -31,6 +31,13 @@ WINNERS = {
     "VIDYAWIRES":"Vidya Wires",
     "LENSKART":"Lenskart",
     "GVT&D":"GE Vernova T&D India",
+    "BIRLACOT":"Birla Cotsyn (India)",
+    "JTLDEFENCE":"JTL Defence",
+    "KETOMOTORS":"Keto Motors",
+    "AHLWEST":"Asian Hotels (West)",
+    "GBLINFRA":"Global Infratech & Finance",
+    "MRUGESH":"Mrugesh Trading",
+    "RAYMOND":"Raymond",
 }
 # Check before/around the historical run-up, not after it. The MBE score at a
 # checkpoint uses only data available at that checkpoint.
