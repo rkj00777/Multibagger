@@ -151,8 +151,18 @@ def build_scanner_funnel(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
         + pd.to_numeric(x["ret_21d"], errors="coerce").rank(pct=True).fillna(0) * 15
     )
 
-    # Keep the union, then let the MBE engine perform the deeper ranking.
-    mask = x["chartink_hit"] | x["screener_hit"]
+    # External scanners are discovery inputs, never hard gates. Always add a
+    # deterministic full-universe quantitative early-transition arm so a genuine
+    # early inflection cannot disappear merely because Chartink/Screener omitted
+    # the symbol. This is blind and winner-independent.
+    r21 = pd.to_numeric(x["ret_21d"], errors="coerce").rank(pct=True).fillna(0)
+    r63 = pd.to_numeric(x["ret_63d"], errors="coerce").rank(pct=True).fillna(0)
+    r126 = pd.to_numeric(x["ret_126d"], errors="coerce").rank(pct=True).fillna(0)
+    liq = pd.to_numeric(x["avg_turnover_60d"], errors="coerce").rank(pct=True).fillna(0)
+    x["local_early_score"] = r21 * 40 + r63 * 30 + r126 * 20 + liq * 10
+    local_n = max(100, int(len(x) * 0.25))
+    local_arm = x.nlargest(min(local_n, len(x)), "local_early_score")
+    mask = x["chartink_hit"] | x["screener_hit"] | x["symbol"].isin(local_arm["symbol"])
     screened = x[mask].copy()
     if screened.empty:
         screened = x.copy()
@@ -165,7 +175,8 @@ def build_scanner_funnel(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
         "chartink_union": len(chart_union),
         "screener_symbols": len(screener),
         "chartink_local_fallback": local_fallback,
+        "local_early_arm": int(len(local_arm)),
         "scanner_union": int(mask.sum()),
-        "scanner_funnel": "CHARTINK_TECHNICAL_PLUS_SCREENER_FUNDAMENTAL",
+        "scanner_funnel": "EXTERNAL_DISCOVERY_PLUS_BLIND_FULL_UNIVERSE_EARLY_ARM",
     }
     return screened, status
