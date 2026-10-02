@@ -264,7 +264,6 @@ def audit_date(as_of):
         drow=target_discovery[target_discovery.symbol==sym]
         frow=fundamental_pool[fundamental_pool.symbol==sym]
         mrow=mbe_pool[mbe_pool.symbol==sym]
-        fbrow=all_targets[all_targets.symbol==sym] if "all_targets" in locals() and not all_targets.empty else pd.DataFrame()
         base={}
         if not srow.empty:
             base.update(srow.iloc[0].to_dict())
@@ -293,19 +292,6 @@ def audit_date(as_of):
             base["fundamental_rank"]=None
         if not mrow.empty:
             base.update(mrow.iloc[0].to_dict())
-        if not fbrow.empty:
-            fr=fbrow.iloc[0]
-            base.update({
-                "diagnostic_mbe_score":fr.get("diagnostic_mbe_score"),
-                "diagnostic_mbe_stage":fr.get("diagnostic_mbe_stage"),
-                "diagnostic_6m_return":fr.get("diagnostic_6m_return"),
-                "diagnostic_only":not bool(base.get("mbe_pool_selected",False)),
-            })
-        else:
-            base.setdefault("diagnostic_mbe_score",None)
-            base.setdefault("diagnostic_mbe_stage",None)
-            base.setdefault("diagnostic_6m_return",None)
-            base.setdefault("diagnostic_only",True)
         if mrow.empty:
             for c in [
                 "fundamental_score","fundamental_module_count",
@@ -349,10 +335,6 @@ def audit_date(as_of):
             "early_stage":base.get("early_stage"),
             "early_watch":base.get("early_watch"),
             "production_mbe_gate":base.get("production_mbe_gate"),
-            "diagnostic_mbe_score":base.get("diagnostic_mbe_score"),
-            "diagnostic_mbe_stage":base.get("diagnostic_mbe_stage"),
-            "diagnostic_6m_return":base.get("diagnostic_6m_return"),
-            "diagnostic_only":base.get("diagnostic_only"),
         })
     return rows
 
@@ -399,87 +381,4 @@ def main():
     json.dump(out,open("reports/multibagger-winner-audit.json","w"),indent=2,default=str)
     print(json.dumps(out,indent=2,default=str))
 
-if __name__=="__main__": main()    # FALLBACK DIAGNOSTIC: if a historical winner did not survive the production
-    # scanner/fundamental/MBE pools, still reconstruct its latent MBE signal using
-    # PIT fundamentals and full-market price percentiles. This does NOT promote the
-    # name and is labelled diagnostic_only; it prevents the scanner funnel from
-    # hiding whether the underlying MBE vectors existed before the run-up.
-    all_targets=target_screened.copy()
-    if not all_targets.empty:
-        f_all=facts_df[facts_df.symbol.isin(all_targets.symbol)] if not facts_df.empty else pd.DataFrame()
-        all_pit=set(f_all.symbol.astype(str).unique()) if not f_all.empty else set()
-        missing_all=[s for s in all_targets.symbol.astype(str).tolist() if s not in all_pit]
-        if missing_all:
-            try:
-                dyn=NSEPIT(); rr=[]
-                for s in missing_all:
-                    try: rr.extend(dyn.facts(s,as_of) or [])
-                    except Exception: pass
-                if rr:
-                    ddf=pd.DataFrame(rr)
-                    f_all=pd.concat([f_all,ddf],ignore_index=True) if not f_all.empty else ddf
-                    all_pit.update(ddf.symbol.astype(str).unique())
-            except Exception: pass
-        rec_all=f_all.to_dict(orient="records") if not f_all.empty else []
-        fs_all=score_fundamentals(all_targets,rec_all) if rec_all else pd.DataFrame()
-        if not fs_all.empty:
-            all_targets=all_targets.merge(fs_all,on="symbol",how="left")
-            for cc in modules:
-                if cc not in all_targets: all_targets[cc]=float("nan")
-            all_targets["fundamental_score"]=all_targets[modules].mean(axis=1,skipna=True)
-            all_targets["fundamental_module_count"]=all_targets[modules].notna().sum(axis=1)
-            all_targets["pit_verified"]=all_targets.symbol.astype(str).isin(all_pit)
-
-            # Map full-market percentile ranks by symbol, preserving PIT cross-section.
-            px_idx=px.set_index("symbol")
-            def rank_map(col,default=-1e9):
-                s=pd.to_numeric(px_idx[col],errors="coerce").fillna(default)
-                return s.rank(pct=True)*100
-            r21m=rank_map("ret_21d"); r63m=rank_map("ret_63d"); r126m=rank_map("ret_126d")
-            r252m=rank_map("ret_252d")
-            all_targets["trend_score"]=(
-                r63m.reindex(all_targets.symbol).fillna(0).values*.25+
-                r126m.reindex(all_targets.symbol).fillna(0).values*.35+
-                r252m.reindex(all_targets.symbol).fillna(0).values*.40
-            )
-            all_targets["discovery_score"]=all_targets["trend_score"]
-            all_targets["early_momentum_score"]=(
-                r21m.reindex(all_targets.symbol).fillna(0).values*.50+
-                r63m.reindex(all_targets.symbol).fillna(0).values*.30+
-                r126m.reindex(all_targets.symbol).fillna(0).values*.20
-            )
-            ei_all=score_early_inflection(all_targets,all_targets,{})
-            for cc in ["earnings_inflection","operating_leverage","cash_inflection","balance_sheet_runway","early_inflection_score","early_stage"]:
-                if cc in ei_all: all_targets[cc]=ei_all[cc].values
-            all_targets["early_trend_component"]=(r21m.reindex(all_targets.symbol).fillna(0).values*.45+
-                                                  r63m.reindex(all_targets.symbol).fillna(0).values*.35+
-                                                  r126m.reindex(all_targets.symbol).fillna(0).values*.20)
-            all_targets["acceleration_component"]=(
-                (pd.to_numeric(px_idx["ret_21d"],errors="coerce").fillna(-1e9)-
-                 pd.to_numeric(px_idx["ret_63d"],errors="coerce").fillna(-1e9)/3.0)
-                .rank(pct=True)*100
-            ).reindex(all_targets.symbol).fillna(0).values
-            all_targets["maturity_flag"]=(
-                (all_targets.ret_126d.fillna(0)>1.0)|(all_targets.ret_252d.fillna(0)>2.0)
-            )
-            all_targets["maturity_penalty"]=all_targets["maturity_flag"].astype(float)*15
-            all_targets["earnings_component"]=all_targets["earnings_inflection"].fillna(50)
-            all_targets["balance_component"]=all_targets["balance_sheet_runway"].fillna(50)
-            all_targets["diagnostic_mbe_score"]=(
-                all_targets.fundamental_score.fillna(0)*.45+
-                all_targets.earnings_component*.20+
-                all_targets.early_trend_component*.12+
-                all_targets.acceleration_component*.08+
-                all_targets.balance_component*.15-
-                all_targets.maturity_penalty
-            )
-            all_targets["diagnostic_mbe_stage"]=all_targets.apply(
-                lambda r:"MATURE_CONTINUATION" if bool(r.maturity_flag) else
-                ("ACCELERATING" if float(r.acceleration_component)>=70 else "EARLY"),axis=1
-            )
-            all_targets["diagnostic_6m_return"]=all_targets["ret_126d"]
-        else:
-            all_targets=pd.DataFrame()
-
-    # Return every winner with production status plus fallback diagnostic signal.
-
+if __name__=="__main__": main()
