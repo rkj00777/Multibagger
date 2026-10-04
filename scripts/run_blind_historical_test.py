@@ -17,7 +17,8 @@ def audit(d):
  x["blind_score"]=pct(x.ret_21d.fillna(-1e9))*.30+pct(x.ret_63d.fillna(-1e9))*.30+pct(x.ret_126d.fillna(-1e9))*.25+pct(x.avg_turnover_60d.fillna(0))*.15
  # Broad blind candidate set: no Chartink/Screener/current information.
  disc=x.sort_values("blind_score",ascending=False).head(min(500,len(x))).copy()
- disc["trend_score"]=disc["blind_score"]\ndisc["discovery_rank"]=range(1,len(disc)+1)
+ disc["trend_score"]=disc["blind_score"]
+disc["discovery_rank"]=range(1,len(disc)+1)
  facts=load_facts(d); facts=facts[facts.symbol.isin(disc.symbol)] if not facts.empty else pd.DataFrame()
  pit=set(facts.symbol.astype(str)) if not facts.empty else set()
  missing=[s for s in disc.symbol.astype(str) if s not in pit]
