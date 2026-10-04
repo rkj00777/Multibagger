@@ -2,7 +2,6 @@ import json,os
 import pandas as pd
 from core.market_data import nse_cross_section
 from core.pit_store import load_facts
-from core.nse_pit import NSEPIT
 from multibagger.modules import score_fundamentals
 from multibagger.early_inflection import score_early_inflection
 from multibagger.firewall import apply_trap_firewall
