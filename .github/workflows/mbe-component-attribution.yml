@@ -1,0 +1,18 @@
+name: MBE Component Attribution
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["scripts/run_mbe_component_attribution.py",".github/workflows/mbe-component-attribution.yml"]
+jobs:
+  attribution:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install -r requirements.txt
+      - run: PYTHONPATH=. python scripts/run_mbe_component_attribution.py
+      - uses: actions/upload-artifact@v4
+        with: {name: mbe-component-attribution,path: reports/mbe-component-attribution.json}
