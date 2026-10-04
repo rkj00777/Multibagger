@@ -16,3 +16,5 @@ jobs:
       - run: PYTHONPATH=. python scripts/run_blind_historical_test.py
       - uses: actions/upload-artifact@v4
         with: {name: blind-historical-mbe-test,path: reports/blind-historical-mbe-test.json}
+
+# retrigger after test repair
