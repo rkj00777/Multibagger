@@ -16,3 +16,5 @@ jobs:
       - run: PYTHONPATH=. python scripts/run_mbe_component_attribution.py
       - uses: actions/upload-artifact@v4
         with: {name: mbe-component-attribution,path: reports/mbe-component-attribution.json}
+
+# retrigger attribution after repository audit
