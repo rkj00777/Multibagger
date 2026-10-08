@@ -23,8 +23,8 @@ def audit(d):
  pit=set(facts.symbol.astype(str)) if not facts.empty else set()
  fs=score_fundamentals(disc,facts.to_dict("records") if not facts.empty else [])
  if not fs.empty: disc=disc.merge(fs,on="symbol",how="left",suffixes=("","_fund"))
-    if "trend_score_fund" in disc:
-        disc["trend_score"] = disc["trend_score"].fillna(disc["trend_score_fund"])
+ if "trend_score_fund" in disc:
+  disc["trend_score"] = disc["trend_score"].fillna(disc["trend_score_fund"])
  mods=["valuation_gap","earnings_acceleration","cash_conversion","reinvestment_roic","governance_balance_sheet"]
  for c in mods:
   if c not in disc:disc[c]=float("nan")
