@@ -1,0 +1,9 @@
+{
+  "as_of": "2026-10-09",
+  "new_or_seen_rows": 0,
+  "offset": 0,
+  "pit_rule": "broadcast_time <= as_of",
+  "requested": 300,
+  "source": "BSE_LODR_IXBRL",
+  "total_rows": 0
+}
