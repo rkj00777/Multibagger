@@ -20,10 +20,14 @@ def run_date(d):
     x=x[x.avg_turnover_60d.ge(2_000_000)&x.ret_63d.notna()].copy()
     x["blind_score"]=pct(x.ret_21d.fillna(-1e9))*.30+pct(x.ret_63d.fillna(-1e9))*.30+pct(x.ret_126d.fillna(-1e9))*.25+pct(x.avg_turnover_60d.fillna(0))*.15
     disc=x.sort_values("blind_score",ascending=False).head(min(500,len(x))).copy()
+    disc["trend_score"]=disc["blind_score"]
     facts=load_facts(d); facts=facts[facts.symbol.isin(disc.symbol)] if not facts.empty else pd.DataFrame()
     pit=set(facts.symbol.astype(str)) if not facts.empty else set()
     fs=score_fundamentals(disc,facts.to_dict("records") if not facts.empty else [])
     if not fs.empty: disc=disc.merge(fs,on="symbol",how="left",suffixes=("","_fund"))
+    if "trend_score" not in disc.columns:
+        disc["trend_score"]=disc["trend_score_fund"] if "trend_score_fund" in disc.columns else disc["blind_score"]
+    disc["trend_score"]=pd.to_numeric(disc["trend_score"],errors="coerce").fillna(disc["blind_score"])
     for c in MODS:
         if c not in disc:disc[c]=float("nan")
     disc["fundamental_score"]=disc[MODS].mean(axis=1,skipna=True)
