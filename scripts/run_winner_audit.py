@@ -246,7 +246,11 @@ def audit_date(as_of):
         s for s in discovery.symbol.astype(str).tolist()
         if s not in pit_symbols
     ]
-    if missing:
+    # Historical audit defaults to the archived PIT store so repeated runs are
+    # deterministic and do not hammer the free NSE endpoint. Dynamic acquisition
+    # is opt-in for a deliberate backfill job only.
+    use_dynamic_pit_fallback = os.getenv("MBE_ENABLE_DYNAMIC_PIT_FALLBACK", "0").strip().lower() in {"1", "true", "yes"}
+    if missing and use_dynamic_pit_fallback:
         try:
             dyn=NSEPIT()
             rows=[]
