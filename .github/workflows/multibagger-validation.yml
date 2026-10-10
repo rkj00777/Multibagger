@@ -2,7 +2,7 @@ name: Multibagger PIT Validation
 on:
   push:
     branches: [main]
-    paths: ["core/**", "multibagger/**", "scripts/**", "requirements.txt", ".github/workflows/multibagger-validation.yml"]
+    paths: ["core/**", "multibagger/**", "scripts/**", "data/pit/**", "requirements.txt", ".github/workflows/multibagger-validation.yml"]
   workflow_dispatch:
   schedule:
     - cron: "15 13 * * 6"
