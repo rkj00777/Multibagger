@@ -52,12 +52,20 @@ jobs:
           # Other workflows may have persisted live PIT facts while this job
           # was running. Rebase onto the latest main and union JSONL rows if
           # append-only fact files overlap, rather than dropping either write.
-          git fetch origin main
-          if ! git rebase origin/main; then
-            PYTHONPATH=. python scripts/merge_pit_conflicts.py
-            GIT_EDITOR=true git rebase --continue
-          fi
-          git push origin HEAD:main
+          pushed=0
+          for attempt in 1 2 3; do
+            if git push origin HEAD:main; then
+              pushed=1
+              break
+            fi
+            echo "Push attempt $attempt raced with another main update; rebasing."
+            git fetch origin main
+            if ! git rebase origin/main; then
+              PYTHONPATH=. python scripts/merge_pit_conflicts.py
+              GIT_EDITOR=true git rebase --continue
+            fi
+          done
+          test "$pushed" -eq 1
 
       - name: Run walk-forward validation on archived PIT facts
         env:
