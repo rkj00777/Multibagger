@@ -1,4 +1,17 @@
-# MBE Historical Winner Study and Candidate Funnel (Draft v1)
+# MBE Historical Winner Study and Candidate Funnel
+
+## Implementation status — 10 October 2026
+
+The first leakage-safe implementation is now committed on `main`.
+
+- Historical funnel code: `scripts/run_winner_audit.py`.
+- The historical audit uses three independent discovery arms: broad technical transition, PIT-fundamental confirmation, and an optional constructive-near-high arm. The arms are unioned before the unchanged downstream MBE gates.
+- The historical audit does **not** query current Chartink/Screener membership. Those services remain live discovery inputs only; their current results cannot be projected backward into historical dates.
+- The PIT store and NSE PIT parser now require both `available_at <= decision_date` and `period_end <= decision_date`.
+- The audit does **not** use today's announcement pages to infer historical catalysts. No archived PIT catalyst store is currently available, so historical catalyst/promotion status is explicitly unverified rather than treated as a neutral score or a pass.
+- Leakage and funnel unit tests passed in [CI #146](https://github.com/rkj00777/Multibagger/actions/runs/38057668797). The latest code-validation run is [CI #147](https://github.com/rkj00777/Multibagger/actions/runs/38057765817), and the updated winner audit is [run #34](https://github.com/rkj00777/Multibagger/actions/runs/38057765784). Their final outcomes must be checked before declaring the audit complete.
+
+**Readiness distinction:** the live scanner can execute and produce a shortlist, but this is not proof of multibagger predictive power. Historical statistical validation, catalyst archival coverage, and broad survivorship-safe historical universe coverage remain separate evidence gates. No scoring weights or production thresholds were loosened.
 
 ## Purpose
 Use the 27 historical winners already recorded in `scripts/run_blind_historical_test.py` as a discovery/falsification set, not as hard-coded target names. Study both successful and failed candidates at decision dates before their major moves. Do not change MBE weights or gates from retrospective anecdotes.
