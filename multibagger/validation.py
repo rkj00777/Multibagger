@@ -24,20 +24,33 @@ REQUIRED_COLUMNS = [
 
 
 def forward_returns(symbols, as_of, horizon_days=252):
-    """Return the close-to-close return after N future trading sessions.
+    """Return forward close-to-close returns after 6/12/24-month trading horizons.
 
-    Despite the historical parameter name, horizon_days is a count of observed
-    trading sessions, not calendar days. The old SQL used INTERVAL '252 days',
-    which measured roughly eight months and mislabeled it as a one-year horizon.
+    Horizons are observed trading sessions (126, 252, 504), not calendar days.
+    Prices are restricted to ordinary NSE equity series and deduplicated by
+    symbol/date so alternate series cannot inflate the session count.
     """
     y = int(as_of[:4])
-    urls = [f"{HF}/nse/year={z}/nse_{z}.parquet" for z in range(y, min(y + 2, 2027))]
+    urls = [
+        f"{HF}/nse/year={z}/nse_{z}.parquet"
+        for z in range(y, min(y + 3, 2027))
+    ]
     c = duckdb.connect()
     paths = "[" + ",".join(repr(x) for x in urls) + "]"
     syms = ",".join("'" + s.replace("'", "''") + "'" for s in symbols)
-    q = f"""WITH p AS (
-        SELECT symbol,date,close FROM read_parquet({paths},union_by_name=true)
+    q = f"""WITH raw AS (
+        SELECT symbol,date,close,series
+        FROM read_parquet({paths},union_by_name=true)
         WHERE symbol IN ({syms})
+          AND series IN ('EQ','BE','BZ') AND close>0
+    ),
+    p AS (
+        SELECT symbol,date,close
+        FROM raw
+        QUALIFY row_number() OVER(
+            PARTITION BY symbol,date
+            ORDER BY CASE series WHEN 'EQ' THEN 0 WHEN 'BE' THEN 1 ELSE 2 END
+        )=1
     ),
     a AS (
         SELECT symbol,arg_max(close,date) FILTER(WHERE date<=DATE '{as_of}') px
@@ -50,12 +63,17 @@ def forward_returns(symbols, as_of, horizon_days=252):
         WHERE date>DATE '{as_of}'
     ),
     b AS (
-        SELECT symbol,arg_min(close,date) FILTER(
-            WHERE forward_session={int(horizon_days)}
-        ) fx
+        SELECT symbol,
+          arg_min(close,date) FILTER(WHERE forward_session=126) f126,
+          arg_min(close,date) FILTER(WHERE forward_session=252) f252,
+          arg_min(close,date) FILTER(WHERE forward_session=504) f504
         FROM future GROUP BY symbol
     )
-    SELECT a.symbol,a.px,b.fx,b.fx/a.px-1 forward_return
+    SELECT a.symbol,a.px,b.f126,b.f252,b.f504,
+           b.f126/a.px-1 forward_return_6m,
+           b.f252/a.px-1 forward_return_12m,
+           b.f504/a.px-1 forward_return_24m,
+           b.f252/a.px-1 forward_return
     FROM a LEFT JOIN b USING(symbol)"""
     out = c.execute(q).fetchdf()
     c.close()
@@ -336,8 +354,12 @@ def validate(months, top_n=25):
         z["fundamental_module_count"] = z[MODULES].notna().sum(axis=1)
         z["decision_date"] = as_of
 
-        # Preserve every module explicitly for downstream statistical validation.
-        rows.extend(z[REQUIRED_COLUMNS].to_dict("records"))
+        # Preserve every module and every forward horizon for downstream
+        # statistical validation. Null future horizons remain visible as
+        # immature observations rather than being mislabeled as failures.
+        horizon_columns = ["forward_return_6m", "forward_return_12m", "forward_return_24m"]
+        keep = REQUIRED_COLUMNS + [col for col in horizon_columns if col in z.columns]
+        rows.extend(z[keep].to_dict("records"))
 
     out = pd.DataFrame(rows)
     if out.empty:
@@ -355,16 +377,50 @@ def validate(months, top_n=25):
     if missing:
         return {"status": "VALIDATION_SCHEMA_ERROR", "missing_columns": missing}
 
-    statistical = _statistical_validation(out)
-    lift = statistical.get("selection_lift_ci", {})
-    top_mean = lift.get("top_quartile_mean")
-    all_mean = lift.get("all_mean")
-    excess_return = lift.get("difference_in_means")
-    relative_return_ratio = (
-        top_mean / all_mean
-        if top_mean is not None and all_mean is not None and all_mean > 1e-12
-        else None
-    )
+    horizon_validation = {}
+    for label, column in [
+        ("6m_126_sessions", "forward_return_6m"),
+        ("12m_252_sessions", "forward_return_12m"),
+        ("24m_504_sessions", "forward_return_24m"),
+    ]:
+        if column not in out.columns:
+            continue
+        frame = out.copy()
+        frame["forward_return"] = pd.to_numeric(frame[column], errors="coerce")
+        valid = frame.dropna(subset=["forward_return"])
+        if valid.empty:
+            horizon_validation[label] = {
+                "status": "NO_MATURE_FORWARD_RETURNS",
+                "observations": 0,
+                "decision_dates": 0,
+            }
+            continue
+        stats = _statistical_validation(frame)
+        lift = stats.get("selection_lift_ci", {})
+        horizon_validation[label] = {
+            "status": "OK",
+            "observations": int(len(valid)),
+            "decision_dates": int(valid.decision_date.nunique()),
+            "top_quartile_forward_return": lift.get("top_quartile_mean"),
+            "all_forward_return": lift.get("all_mean"),
+            "selection_lift": lift.get("difference_in_means"),
+            "positive_hit_rate": lift.get("top_quartile_positive_hit_rate"),
+            "relative_return_ratio": (
+                lift.get("top_quartile_mean") / lift.get("all_mean")
+                if lift.get("top_quartile_mean") is not None
+                and lift.get("all_mean") is not None
+                and lift.get("all_mean") > 1e-12 else None
+            ),
+            "statistical_validation": stats,
+        }
+
+    # Preserve the 12-month horizon as the backward-compatible top-level result.
+    primary = horizon_validation.get("12m_252_sessions", {})
+    statistical = primary.get("statistical_validation", {})
+    top_mean = primary.get("top_quartile_forward_return")
+    all_mean = primary.get("all_forward_return")
+    excess_return = primary.get("selection_lift")
+    relative_return_ratio = primary.get("relative_return_ratio")
 
     return {
         "status": "PIT_MODULE_VALIDATION_COMPLETE",
@@ -373,12 +429,13 @@ def validate(months, top_n=25):
         "top_quartile_forward_return": top_mean,
         "all_forward_return": all_mean,
         "selection_lift": excess_return,
-        "selection_lift_definition": "top-quartile mean forward return minus all-observation mean forward return",
+        "selection_lift_definition": "within-date top-quartile mean forward return minus within-date all-observation mean forward return",
         "relative_return_ratio": relative_return_ratio,
-        "positive_hit_rate": lift.get("top_quartile_positive_hit_rate"),
-        "next_step": "statistical gate: clustered bootstrap confidence intervals + two-sided permutation tests + Benjamini-Hochberg FDR",
+        "positive_hit_rate": primary.get("positive_hit_rate"),
+        "next_step": "Require adequate independent decision dates, positive out-of-sample excess return, confidence intervals and FDR control before promotion.",
         "pit_source": "LOCAL_ARCHIVED_PIT_STORE_ONLY" if not use_dynamic_pit_fallback else "LOCAL_ARCHIVED_PIT_STORE_PLUS_DYNAMIC_NSE_FALLBACK",
         "dynamic_pit_fallback_enabled": bool(use_dynamic_pit_fallback),
         "date_diagnostics": date_diagnostics,
+        "horizon_validation": horizon_validation,
         "statistical_validation": statistical,
     }
