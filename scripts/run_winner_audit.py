@@ -453,20 +453,95 @@ def _audit_rows_without_mbe(as_of,target_screened,target_discovery,discovery):
         })
     return rows
 
+def summarize_historical_detection(winners, rows):
+    """Summarize pre-run detection without confusing retrospective labels with model inputs."""
+    outcomes = {str(w.get("symbol")): w for w in winners}
+    by_symbol = {}
+    for row in rows:
+        by_symbol.setdefault(str(row.get("symbol")), []).append(row)
+
+    stages = [
+        ("screened", "Reached historical discovery union"),
+        ("discovery_selected", "Entered discovery pool"),
+        ("fundamental_pool_selected", "Entered PIT fundamental pool"),
+        ("mbe_pool_selected", "Entered MBE pool"),
+        ("production_mbe_gate", "Passed every production gate"),
+    ]
+    per_symbol = []
+    for symbol, outcome in outcomes.items():
+        hit_date = outcome.get("first_plus_100_date")
+        hit_date = hit_date if isinstance(hit_date, str) and hit_date not in ("nan", "NaT", "") else None
+        checkpoints = sorted(by_symbol.get(symbol, []), key=lambda r: r.get("decision_date") or "")
+        pre_run = [
+            r for r in checkpoints
+            if hit_date is None or (r.get("decision_date") and r["decision_date"] < hit_date)
+        ]
+        ret = outcome.get("six_month_return")
+        try:
+            return_6m = float(ret)
+        except (TypeError, ValueError):
+            return_6m = float("nan")
+        realized_2x = bool(pd.notna(return_6m) and return_6m >= 1.0)
+        result = {
+            "symbol": symbol,
+            "name": outcome.get("name"),
+            "six_month_return": return_6m if pd.notna(return_6m) else None,
+            "realized_2x_in_window": realized_2x,
+            "first_plus_100_date": hit_date,
+            "pre_run_checkpoints": len(pre_run),
+        }
+        for key, _label in stages:
+            hit_rows = [r for r in pre_run if bool(r.get(key))]
+            result[key + "_before_plus_100"] = bool(hit_rows)
+            result[key + "_first_date"] = hit_rows[0].get("decision_date") if hit_rows else None
+        per_symbol.append(result)
+
+    cohort_2x = [x for x in per_symbol if x["realized_2x_in_window"]]
+    cohort_other = [x for x in per_symbol if not x["realized_2x_in_window"]]
+    rates = {}
+    for key, label in stages:
+        detected = sum(x[key + "_before_plus_100"] for x in cohort_2x)
+        rates[key] = {
+            "label": label,
+            "detected_2x_names": int(detected),
+            "eligible_2x_names": int(len(cohort_2x)),
+            "pre_run_recall": float(detected / len(cohort_2x)) if cohort_2x else None,
+            "detected_other_names": int(sum(x[key + "_before_plus_100"] for x in cohort_other)),
+            "other_names": int(len(cohort_other)),
+        }
+
+    return {
+        "definition": "A realized 2x name has >=100% close-to-close return from the first available checkpoint price through 2026-08-07. Detection must occur on a checkpoint strictly before its first +100% date.",
+        "sample_size": len(per_symbol),
+        "realized_2x_names": len(cohort_2x),
+        "other_or_failed_names": len(cohort_other),
+        "stage_recall": rates,
+        "per_symbol": per_symbol,
+        "limitations": [
+            "This is a small, retrospectively assembled six-month falsification cohort, not a representative out-of-sample estimate.",
+            "Historical catalyst evidence is unavailable, so no historical promotion can be certified.",
+            "Price/fundamental discovery arms are reconstructed from available PIT proxies, not historical Chartink/Screener membership.",
+        ],
+    }
+
+
 def main():
     rows=[]
     for d in CHECKPOINTS: rows.extend(audit_date(d))
     th=threshold_dates()
+    detection = summarize_historical_detection(th.to_dict(orient="records"), rows)
     os.makedirs("reports",exist_ok=True)
     out={"status":"WINNER_MBE_PIT_AUDIT_COMPLETE",
          "winner_window":"2026-02-06 to 2026-08-07",
          "method":"Production MBE score reproduced at PIT checkpoints; no post-checkpoint fundamentals used",
          "note":"A stock is considered 'detected before discovery' only if its production MBE score/gates clear at a checkpoint preceding its major run-up. This audit does not use the later winner outcome in the score.",
          "winners":th.to_dict(orient="records"),
+         "historical_detection_metrics":detection,
          "checkpoint_signals":rows,
          "historical_funnel_diagnostics":FUNNEL_DIAGNOSTICS,
          "leakage_guard":"Historical audit does not query current Chartink/Screener screens or live announcement pages; current scanner outputs are reserved for live discovery.",
          "catalyst_validation_status":"UNVERIFIED_NO_HISTORICAL_PIT_ARCHIVE",
+         "production_readiness":"NOT_VALIDATED_FOR_AUTOMATED_CAPITAL_DEPLOYMENT",
          "production_gate_note":"Historical promotion is not credited without archived PIT catalyst evidence; this is a data limitation, not proof that a company lacked a catalyst."}
     json.dump(out,open("reports/multibagger-winner-audit.json","w"),indent=2,default=str)
     print(json.dumps(out,indent=2,default=str))
