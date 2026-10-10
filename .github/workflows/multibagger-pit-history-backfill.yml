@@ -4,6 +4,9 @@ on:
   push:
     paths:
       - ".github/workflows/multibagger-pit-history-backfill.yml"
+      - "scripts/backfill_pit_history.py"
+      - "core/nse_pit.py"
+      - "core/market_data.py"
   workflow_dispatch:
 
 concurrency:
@@ -28,34 +31,29 @@ jobs:
 
       - run: pip install -r requirements.txt
 
-      - name: Backfill historical PIT evidence
+      - name: Backfill historical PIT evidence from free NSE filings
         env:
           PIT_WORKERS: "6"
         run: |
           set -euo pipefail
-          for AS_OF in \
-            2025-04-30 2025-05-31 2025-06-30 2025-07-31 2025-08-31 \
-            2025-09-30 2025-10-31 2025-11-30 2025-12-31
-          do
-            echo "=== PIT BACKFILL $AS_OF ==="
-            PYTHONPATH=. python scripts/ingest_pit.py --as-of "$AS_OF" --limit 300
-          done
+          PYTHONPATH=. python scripts/backfill_pit_history.py --top-n 100 --workers 6
 
-      - name: Persist historical PIT evidence
+      - name: Persist timestamped PIT evidence
         run: |
           git config user.name "multibagger-bot"
           git config user.email "multibagger-bot@users.noreply.github.com"
-          git add data/pit
+          git add data/pit reports/multibagger-pit-history-backfill.json
           if git diff --cached --quiet; then
             echo "No new PIT evidence."
           else
-            git commit -m "Backfill historical PIT evidence Apr-Dec 2025"
+            git commit -m "Backfill timestamped NSE PIT history for walk-forward validation"
             git push
           fi
 
-      - name: Run expanded PIT validation
+      - name: Run walk-forward validation on archived PIT facts
         env:
-          VALIDATION_MONTHS: "2025-04-30,2025-05-31,2025-06-30,2025-07-31,2025-08-31,2025-09-30,2025-10-31,2025-11-30,2025-12-31"
+          VALIDATION_MONTHS: "2022-03-31,2022-06-30,2022-09-30,2022-12-30,2023-03-31,2023-06-30,2023-09-29,2023-12-29,2024-03-28,2024-06-28,2024-09-30,2024-12-30,2025-03-31,2025-06-30,2025-09-30,2025-12-31"
+          MBE_ENABLE_DYNAMIC_PIT_FALLBACK: "0"
         run: |
           PYTHONPATH=. python scripts/run_validation.py
 
@@ -64,5 +62,6 @@ jobs:
         with:
           name: multibagger-pit-history-validation
           path: |
+            reports/multibagger-pit-history-backfill.json
             reports/multibagger-pit-validation.json
             data/pit/manifest.json
