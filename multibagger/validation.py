@@ -24,6 +24,12 @@ REQUIRED_COLUMNS = [
 
 
 def forward_returns(symbols, as_of, horizon_days=252):
+    """Return the close-to-close return after N future trading sessions.
+
+    Despite the historical parameter name, horizon_days is a count of observed
+    trading sessions, not calendar days. The old SQL used INTERVAL '252 days',
+    which measured roughly eight months and mislabeled it as a one-year horizon.
+    """
     y = int(as_of[:4])
     urls = [f"{HF}/nse/year={z}/nse_{z}.parquet" for z in range(y, min(y + 2, 2027))]
     c = duckdb.connect()
@@ -37,11 +43,17 @@ def forward_returns(symbols, as_of, horizon_days=252):
         SELECT symbol,arg_max(close,date) FILTER(WHERE date<=DATE '{as_of}') px
         FROM p GROUP BY symbol
     ),
+    future AS (
+        SELECT symbol,date,close,
+               row_number() OVER(PARTITION BY symbol ORDER BY date) AS forward_session
+        FROM p
+        WHERE date>DATE '{as_of}'
+    ),
     b AS (
         SELECT symbol,arg_min(close,date) FILTER(
-            WHERE date>=DATE '{as_of}'+INTERVAL '{horizon_days} days'
+            WHERE forward_session={int(horizon_days)}
         ) fx
-        FROM p GROUP BY symbol
+        FROM future GROUP BY symbol
     )
     SELECT a.symbol,a.px,b.fx,b.fx/a.px-1 forward_return
     FROM a LEFT JOIN b USING(symbol)"""
