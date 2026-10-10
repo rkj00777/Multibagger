@@ -4,6 +4,10 @@ on:
     branches: [main]
     paths: ["multibagger/**", "core/initial_scanners.py", "scripts/run_winner_audit.py", ".github/workflows/multibagger-winner-audit.yml"]
   workflow_dispatch:
+concurrency:
+  group: multibagger-winner-audit
+  cancel-in-progress: true
+
 jobs:
   audit:
     runs-on: ubuntu-latest
