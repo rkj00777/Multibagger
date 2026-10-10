@@ -260,6 +260,8 @@ def validate(months, top_n=25):
     use_dynamic_pit_fallback = str(
         __import__("os").getenv("MBE_ENABLE_DYNAMIC_PIT_FALLBACK", "0")
     ).strip().lower() in {"1", "true", "yes"}
+    # One client per walk-forward run enables catalog/XBRL caching across dates.
+    dyn = NSEPIT() if use_dynamic_pit_fallback else None
     for as_of in months:
         px = nse_cross_section(as_of)
         if px.empty:
@@ -290,9 +292,8 @@ def validate(months, top_n=25):
         missing = [s for s in pool.symbol.astype(str).tolist() if s not in pit_symbols]
         diag["pool_symbols_with_local_pit_facts"] = int(len(pool) - len(missing))
         diag["pool_symbols_missing_local_pit_facts"] = int(len(missing))
-        if missing and use_dynamic_pit_fallback:
+        if missing and use_dynamic_pit_fallback and dyn is not None:
             try:
-                dyn = NSEPIT()
                 rows_dyn = []
                 for sym in missing:
                     try:
