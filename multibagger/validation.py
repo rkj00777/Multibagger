@@ -243,8 +243,12 @@ def _statistical_validation(out):
         t["q_value"] = q
         t["fdr_significant"] = bool(q is not None and q <= .05)
 
-    cutoff = out.fundamental_score.quantile(.75)
-    top = out[out.fundamental_score >= cutoff].forward_return.dropna()
+    selected_frames = []
+    for _date, group in out.groupby("decision_date"):
+        cutoff = group.fundamental_score.quantile(.75)
+        selected_frames.append(group[group.fundamental_score >= cutoff])
+    top_selected = pd.concat(selected_frames, ignore_index=True) if selected_frames else out.iloc[0:0]
+    top = top_selected.forward_return.dropna()
     allr = out.forward_return.dropna()
     lift = _selection_lift_cluster_ci(out, n_boot=10000, seed=103)
 
@@ -258,7 +262,7 @@ def _statistical_validation(out):
         "bootstrap_method": "decision_date_cluster_bootstrap",
         "independent_decision_dates": independent_dates,
         "minimum_independent_decision_dates_for_statistical_gate": 8,
-        "top_quartile_mean_ci": _cluster_bootstrap_mean_ci(out[out.fundamental_score >= cutoff], "forward_return", n_boot=10000, seed=101),
+        "top_quartile_mean_ci": _cluster_bootstrap_mean_ci(top_selected, "forward_return", n_boot=10000, seed=101),
         "all_observations_mean_ci": _cluster_bootstrap_mean_ci(out, "forward_return", n_boot=10000, seed=102),
         "selection_lift_ci": lift,
         "module_tests": tests,
