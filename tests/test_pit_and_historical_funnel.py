@@ -69,5 +69,52 @@ class PITGuardTests(unittest.TestCase):
         self.assertLess(result["difference_in_means"], 0)
 
 
+class NSEPITCatalogPagingTests(unittest.TestCase):
+    def test_historical_catalog_pages_back_and_reuses_cached_rows(self):
+        from core.nse_pit import NSEPIT
+
+        class Response:
+            def __init__(self, payload):
+                self.payload = payload
+            def json(self):
+                return self.payload
+
+        def filing(symbol, period, available, suffix):
+            return {
+                "symbol": symbol,
+                "qe_Date": period,
+                "creation_Date": available,
+                "broadcast_Date": available,
+                "xbrl": "https://example.test/" + suffix + ".xml",
+            }
+
+        future_page = [filing("AAA", "31-Dec-2024", "10-Feb-2025", "future")]
+        old_page = [
+            filing("AAA", "31-Mar-2022", f"{day:02d}-May-2022", f"old{day}")
+            for day in range(1, 9)
+        ]
+        client = NSEPIT.__new__(NSEPIT)
+        client._catalog_cache = {}
+        client._catalog_pages = {}
+        client._catalog_complete = set()
+        client._xbrl_cache = {}
+        calls = []
+
+        def fake_get(url, **kwargs):
+            page = kwargs["params"]["page"]
+            calls.append(page)
+            return Response(future_page if page == 1 else old_page if page == 2 else [])
+
+        client._get = fake_get
+        got = client.catalog("AAA", "2022-06-30")
+        self.assertEqual(len(got), 8)
+        self.assertEqual(calls, [1, 2])
+
+        # Later as-of queries should reuse the cached newest-first catalog.
+        later = client.catalog("AAA", "2023-06-30")
+        self.assertEqual(len(later), 8)
+        self.assertEqual(calls, [1, 2])
+
+
 if __name__ == "__main__":
     unittest.main()
