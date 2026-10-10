@@ -147,18 +147,20 @@ def _selection_lift_cluster_ci(out, n_boot=10000, seed=103):
     x = x.dropna(subset=["decision_date", "fundamental_score", "forward_return"])
     if x.empty:
         return {"status": "NO_DATA"}
-    cutoff = x["fundamental_score"].quantile(.75)
-    x["_selected"] = x["fundamental_score"] >= cutoff
     by_date = x.groupby("decision_date")
     rows = []
     for date, g in by_date:
-        top = g.loc[g["_selected"], "forward_return"].dropna()
+        # Select the top quartile independently within each decision date;
+        # a global cutoff would silently change the selected fraction over time.
+        cutoff = g["fundamental_score"].quantile(.75)
+        top = g.loc[g["fundamental_score"] >= cutoff, "forward_return"].dropna()
         allr = g["forward_return"].dropna()
         if len(top) and len(allr):
             rows.append({
                 "decision_date": date,
                 "top_mean": float(top.mean()),
                 "all_mean": float(allr.mean()),
+                "top_positive_hit_rate": float((top > 0).mean()),
             })
     d = pd.DataFrame(rows)
     if d.empty:
@@ -183,6 +185,9 @@ def _selection_lift_cluster_ci(out, n_boot=10000, seed=103):
     return {
         "status": "OK",
         "independent_decision_dates": int(len(d)),
+        "top_quartile_mean": float(d.top_mean.mean()),
+        "all_mean": float(d.all_mean.mean()),
+        "top_quartile_positive_hit_rate": float(d.top_positive_hit_rate.mean()),
         "difference_in_means": observed_diff,
         "difference_ci_low": float(np.quantile(diffs, .025)),
         "difference_ci_high": float(np.quantile(diffs, .975)),
@@ -350,15 +355,16 @@ def validate(months, top_n=25):
     if missing:
         return {"status": "VALIDATION_SCHEMA_ERROR", "missing_columns": missing}
 
-    q = out.fundamental_score.quantile(.75)
-    top = out[out.fundamental_score >= q].forward_return.dropna()
-    allr = out.forward_return.dropna()
-
     statistical = _statistical_validation(out)
-    top_mean = float(top.mean()) if len(top) else None
-    all_mean = float(allr.mean()) if len(allr) else None
-    excess_return = (top_mean - all_mean) if top_mean is not None and all_mean is not None else None
-    relative_return_ratio = (top_mean / all_mean) if top_mean is not None and all_mean is not None and all_mean > 1e-12 else None
+    lift = statistical.get("selection_lift_ci", {})
+    top_mean = lift.get("top_quartile_mean")
+    all_mean = lift.get("all_mean")
+    excess_return = lift.get("difference_in_means")
+    relative_return_ratio = (
+        top_mean / all_mean
+        if top_mean is not None and all_mean is not None and all_mean > 1e-12
+        else None
+    )
 
     return {
         "status": "PIT_MODULE_VALIDATION_COMPLETE",
@@ -369,7 +375,7 @@ def validate(months, top_n=25):
         "selection_lift": excess_return,
         "selection_lift_definition": "top-quartile mean forward return minus all-observation mean forward return",
         "relative_return_ratio": relative_return_ratio,
-        "positive_hit_rate": float((top > 0).mean()) if len(top) else None,
+        "positive_hit_rate": lift.get("top_quartile_positive_hit_rate"),
         "next_step": "statistical gate: clustered bootstrap confidence intervals + two-sided permutation tests + Benjamini-Hochberg FDR",
         "pit_source": "LOCAL_ARCHIVED_PIT_STORE_ONLY" if not use_dynamic_pit_fallback else "LOCAL_ARCHIVED_PIT_STORE_PLUS_DYNAMIC_NSE_FALLBACK",
         "dynamic_pit_fallback_enabled": bool(use_dynamic_pit_fallback),
