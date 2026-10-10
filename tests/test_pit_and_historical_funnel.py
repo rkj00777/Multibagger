@@ -51,7 +51,6 @@ class PITGuardTests(unittest.TestCase):
         self.assertGreater(len(screened), 0)
         self.assertEqual(diag["union"], len(screened))
         self.assertIn("historical_pit_fundamental_arm", screened.columns)
-        self.assertNotIn("Chartink", diag["method"])
         self.assertIn("no live Chartink/Screener membership", diag["method"])
 
 
