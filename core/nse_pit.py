@@ -206,7 +206,8 @@ class NSEPIT:
             return []
         cutoff = _dt(as_of + " 23:59:59")
         rows = [x for x in _catalog_rows(payload)
-                if x.get("available_at") and _dt(x["available_at"]) <= cutoff]
+                if x.get("available_at") and _dt(x["available_at"]) <= cutoff
+                and x.get("period_end") and _dt(x["period_end"]) and _dt(x["period_end"]) <= cutoff]
         rows.sort(key=lambda x: (x.get("period_end") or "", x.get("available_at") or ""), reverse=True)
         return rows
 
@@ -218,13 +219,20 @@ class NSEPIT:
                 facts.extend(_parse_xbrl(r.content, filing))
             except Exception:
                 continue
-        return facts
+        cutoff = _dt(as_of + " 23:59:59")
+        # XBRL contexts can contain comparative or forecast periods. Exclude any
+        # fact whose period end is after the decision date, even if its filing
+        # envelope is otherwise available by that date.
+        return [r for r in facts if _dt(r.get("available_at")) and _dt(r.get("available_at")) <= cutoff
+                and _dt(r.get("period_end")) and _dt(r.get("period_end")) <= cutoff]
 
 def snapshot(records, as_of):
     rows = []
     for r in records:
         if not r.get("available_at"): continue
-        if _dt(r["available_at"]) <= _dt(as_of + " 23:59:59"):
+        cutoff = _dt(as_of + " 23:59:59")
+        period_end = _dt(r.get("period_end"))
+        if _dt(r["available_at"]) <= cutoff and period_end and period_end <= cutoff:
             x = dict(r)
             x["as_of"] = as_of
             rows.append(x)
