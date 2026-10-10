@@ -53,6 +53,21 @@ class PITGuardTests(unittest.TestCase):
         self.assertIn("historical_pit_fundamental_arm", screened.columns)
         self.assertIn("no live Chartink/Screener membership", diag["method"])
 
+    def test_validation_does_not_report_ratio_lift_on_negative_baseline(self):
+        from multibagger.validation import _selection_lift_cluster_ci
+        rows = []
+        for date, returns in [
+            ("2024-01-31", [-.20, -.15, -.10, -.05]),
+            ("2024-02-29", [-.30, -.25, -.20, -.10]),
+        ]:
+            for score, ret in enumerate(returns, start=1):
+                rows.append({"decision_date": date, "fundamental_score": score,
+                             "forward_return": ret})
+        result = _selection_lift_cluster_ci(pd.DataFrame(rows), n_boot=100, seed=7)
+        self.assertEqual(result["ratio_valid_denominator_dates"], 0)
+        self.assertIsNone(result["ratio_mean_where_valid"])
+        self.assertLess(result["difference_in_means"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()
