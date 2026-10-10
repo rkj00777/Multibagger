@@ -249,8 +249,6 @@ class NSEPIT:
                     cached.append(row)
                     known.add(row.get("xbrl_url"))
             self._catalog_pages[key] = page
-            if len(batch) < page_size:
-                self._catalog_complete.add(key)
             if not batch:
                 self._catalog_complete.add(key)
 
