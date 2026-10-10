@@ -57,8 +57,8 @@ class PITGuardTests(unittest.TestCase):
         from multibagger.validation import _selection_lift_cluster_ci
         rows = []
         for date, returns in [
-            ("2024-01-31", [-.20, -.15, -.10, -.05]),
-            ("2024-02-29", [-.30, -.25, -.20, -.10]),
+            ("2024-01-31", [-.05, -.10, -.15, -.20]),
+            ("2024-02-29", [-.10, -.20, -.25, -.30]),
         ]:
             for score, ret in enumerate(returns, start=1):
                 rows.append({"decision_date": date, "fundamental_score": score,
