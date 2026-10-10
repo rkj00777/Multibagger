@@ -11,7 +11,7 @@ on:
 
 concurrency:
   group: multibagger-pit-history-backfill
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 permissions:
   contents: write
