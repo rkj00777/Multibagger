@@ -63,13 +63,21 @@ def threshold_dates():
     out=[]
     for s,n in WINNERS.items():
         g=p[(p.symbol==s)&(p.date>=start)].copy().sort_values("date")
-        if g.empty: continue
+        if g.empty:
+            out.append({
+                "symbol": s, "name": n, "price_data_available": False,
+                "data_status": "NO_PRICE_ROWS_IN_SOURCE_WINDOW",
+                "start_price": None, "end_date": "2026-08-07",
+                "six_month_return": None, "first_plus_100_date": None,
+            })
+            continue
         p0=float(g.iloc[0].close)
         g["ret_from_start"]=g.close/p0-1
         hit=g[g.ret_from_start>=1.0]
         end=g[g.date<=pd.Timestamp("2026-08-07")]
-        out.append({"symbol":s,"name":n,"start_price":p0,
-                    "end_date":"2026-08-07",
+        out.append({"symbol":s,"name":n,"price_data_available":True,
+                    "data_status":"OK" if not end.empty else "NO_END_PRICE",
+                    "start_price":p0,"end_date":"2026-08-07",
                     "six_month_return":float(end.iloc[-1].close/p0-1) if not end.empty else None,
                     "first_plus_100_date":str(hit.iloc[0].date.date()) if not hit.empty else None})
     return pd.DataFrame(out)
@@ -481,12 +489,15 @@ def summarize_historical_detection(winners, rows):
             return_6m = float(ret)
         except (TypeError, ValueError):
             return_6m = float("nan")
-        realized_2x = bool(pd.notna(return_6m) and return_6m >= 1.0)
+        has_price_data = bool(outcome.get("price_data_available", pd.notna(return_6m)) and pd.notna(return_6m))
+        realized_2x = bool(has_price_data and return_6m >= 1.0)
         result = {
             "symbol": symbol,
             "name": outcome.get("name"),
+            "price_data_available": has_price_data,
+            "data_status": outcome.get("data_status", "OK" if has_price_data else "NO_PRICE_DATA"),
             "six_month_return": return_6m if pd.notna(return_6m) else None,
-            "realized_2x_in_window": realized_2x,
+            "realized_2x_in_window": realized_2x if has_price_data else None,
             "first_plus_100_date": hit_date,
             "pre_run_checkpoints": len(pre_run),
         }
@@ -496,8 +507,9 @@ def summarize_historical_detection(winners, rows):
             result[key + "_first_date"] = hit_rows[0].get("decision_date") if hit_rows else None
         per_symbol.append(result)
 
-    cohort_2x = [x for x in per_symbol if x["realized_2x_in_window"]]
-    cohort_other = [x for x in per_symbol if not x["realized_2x_in_window"]]
+    cohort_2x = [x for x in per_symbol if x["price_data_available"] and x["realized_2x_in_window"]]
+    cohort_other = [x for x in per_symbol if x["price_data_available"] and not x["realized_2x_in_window"]]
+    cohort_missing = [x for x in per_symbol if not x["price_data_available"]]
     rates = {}
     for key, label in stages:
         detected = sum(x[key + "_before_plus_100"] for x in cohort_2x)
@@ -513,6 +525,8 @@ def summarize_historical_detection(winners, rows):
     return {
         "definition": "A realized 2x name has >=100% close-to-close return from the first available checkpoint price through 2026-08-07. Detection must occur on a checkpoint strictly before its first +100% date.",
         "sample_size": len(per_symbol),
+        "price_data_covered_names": len(cohort_2x) + len(cohort_other),
+        "price_data_missing_names": len(cohort_missing),
         "realized_2x_names": len(cohort_2x),
         "other_or_failed_names": len(cohort_other),
         "stage_recall": rates,
