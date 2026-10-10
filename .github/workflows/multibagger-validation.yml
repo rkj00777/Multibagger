@@ -15,10 +15,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
-      # Historical walk-forward needs timestamp-filtered NSE filings for dates
-      # not yet covered by the local archive. The NSE PIT client now pages and
-      # caches filings to avoid repeating the same network requests each date.
-      MBE_ENABLE_DYNAMIC_PIT_FALLBACK: "1"
+      # Use the archived PIT store for routine validation. The dedicated history
+      # backfill workflow handles historical NSE requests once, then validation
+      # runs offline against the resulting timestamped archive.
+      MBE_ENABLE_DYNAMIC_PIT_FALLBACK: "0"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
