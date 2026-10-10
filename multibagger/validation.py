@@ -84,7 +84,9 @@ def _cluster_frame(out):
     """Collapse stock-date observations to decision-date means for inference."""
     x = out.copy()
     x["decision_date"] = pd.to_datetime(x["decision_date"], errors="coerce")
-    x = x.dropna(subset=["decision_date"])
+    # Only matured forward-return observations count as independent
+    # decision dates for that horizon.
+    x = x.dropna(subset=["decision_date", "forward_return"])
     if x.empty:
         return pd.DataFrame(columns=["decision_date", *MODULES, "forward_return", "fundamental_score"])
     agg = {m: "mean" for m in MODULES}
