@@ -2,7 +2,6 @@ import json, os
 import duckdb
 import pandas as pd
 from core.market_data import nse_cross_section
-from core.initial_scanners import build_scanner_funnel
 from core.nse_pit import NSEPIT
 from core.pit_store import load_facts
 from core.catalyst import NSECatalyst, ScreenerCatalyst, catalyst_score
@@ -76,6 +75,99 @@ def threshold_dates():
                     "first_plus_100_date":str(hit.iloc[0].date.date()) if not hit.empty else None})
     return pd.DataFrame(out)
 
+
+FUNNEL_DIAGNOSTICS = []
+
+def build_historical_funnel(px, as_of):
+    """Build a leakage-safe historical discovery union using only data available at as_of.
+
+    Current Chartink/Screener results are deliberately excluded from historical
+    backtests because they contain present-day membership and would leak future
+    information. Their live counterparts remain discovery-only inputs in run_live.
+    """
+    x = px.copy()
+    for col in ["ret_21d", "ret_63d", "ret_126d", "ret_252d",
+                "avg_turnover_60d", "pct_off_high"]:
+        x[col] = pd.to_numeric(x.get(col), errors="coerce")
+    liquid = x[x["avg_turnover_60d"].ge(2_000_000) & x["ret_63d"].notna()].copy()
+    if liquid.empty:
+        return liquid, {"as_of": as_of, "universe": len(px), "eligible": 0,
+                        "technical_arm": 0, "pit_fundamental_arm": 0,
+                        "near_high_arm": 0, "union": 0, "pit_facts_symbols": 0}
+
+    def pct(s):
+        return s.rank(pct=True).fillna(0) * 100
+
+    # Broad trend-transition arm; intentionally does not require a 52-week high.
+    liquid["historical_technical_score"] = (
+        pct(liquid["ret_21d"].fillna(-1e9)) * .40
+        + pct(liquid["ret_63d"].fillna(-1e9)) * .30
+        + pct(liquid["ret_126d"].fillna(-1e9)) * .15
+        + pct(liquid["avg_turnover_60d"].fillna(0)) * .15
+    )
+    eligible_n = len(liquid)
+    tech_n = min(500, max(100, int(eligible_n * .25)))
+    technical = liquid.nlargest(min(tech_n, eligible_n), "historical_technical_score")
+
+    # Reconstruct a fundamental discovery arm from the PIT store at the decision
+    # date. Current Screener data is not used for historical evaluation.
+    facts_df = load_facts(as_of)
+    pit_symbols = int(facts_df["symbol"].nunique()) if not facts_df.empty else 0
+    fundamental = pd.DataFrame()
+    if not facts_df.empty:
+        fs_all = score_fundamentals(liquid, facts_df.to_dict(orient="records"))
+        if not fs_all.empty:
+            mods = ["valuation_gap", "earnings_acceleration", "cash_conversion",
+                    "reinvestment_roic", "governance_balance_sheet"]
+            for col in mods:
+                if col not in fs_all:
+                    fs_all[col] = float("nan")
+            fs_all["historical_fundamental_score"] = fs_all[mods].mean(axis=1, skipna=True)
+            fs_all["historical_module_count"] = fs_all[mods].notna().sum(axis=1)
+            fs_all["historical_pit_fundamental_hit"] = (
+                fs_all["historical_module_count"].ge(3)
+                & pd.to_numeric(fs_all["fundamental_evidence"], errors="coerce").ge(.45)
+            )
+            fundamental = fs_all[fs_all["historical_pit_fundamental_hit"]].copy()
+            if not fundamental.empty:
+                fund_n = min(200, max(30, int(len(fundamental) * .20)))
+                fundamental = fundamental.nlargest(
+                    min(fund_n, len(fundamental)), "historical_fundamental_score"
+                )
+
+    # Optional constructive-near-high arm is capped and kept independent; it is
+    # not a mandatory condition for the other two arms.
+    near = liquid[
+        liquid["pct_off_high"].ge(-.15)
+        & liquid["ret_21d"].gt(0)
+        & liquid["ret_126d"].le(.50)
+    ].copy()
+    near_n = min(150, max(30, int(eligible_n * .10)))
+    near = near.nlargest(min(near_n, len(near)), "historical_technical_score")
+
+    tech_syms = set(technical["symbol"].astype(str))
+    fund_syms = set(fundamental["symbol"].astype(str)) if not fundamental.empty else set()
+    near_syms = set(near["symbol"].astype(str))
+    union_syms = tech_syms | fund_syms | near_syms
+    screened = liquid[liquid["symbol"].astype(str).isin(union_syms)].copy()
+    screened["historical_technical_arm"] = screened["symbol"].astype(str).isin(tech_syms)
+    screened["historical_pit_fundamental_arm"] = screened["symbol"].astype(str).isin(fund_syms)
+    screened["historical_near_high_arm"] = screened["symbol"].astype(str).isin(near_syms)
+    screened["scanner_score"] = (
+        screened["historical_technical_arm"].astype(float) * 45
+        + screened["historical_pit_fundamental_arm"].astype(float) * 40
+        + screened["historical_near_high_arm"].astype(float) * 15
+    )
+    diagnostics = {
+        "as_of": as_of, "universe": int(len(px)), "eligible": int(eligible_n),
+        "technical_arm": int(len(tech_syms)), "pit_fundamental_arm": int(len(fund_syms)),
+        "near_high_arm": int(len(near_syms)), "union": int(len(union_syms)),
+        "pit_facts_symbols": pit_symbols,
+        "method": "historical PIT price/fundamental proxies; no live Chartink/Screener membership"
+    }
+    return screened, diagnostics
+
+
 def audit_date(as_of):
     # Reproduce the production pipeline exactly through the MBE stage, then
     # extract the historical winners. This is deliberately NOT a winner-only
@@ -87,7 +179,8 @@ def audit_date(as_of):
     for c in ["ret_21d","ret_63d","ret_126d","ret_252d","avg_turnover_60d","pct_off_high"]:
         px[c]=pd.to_numeric(px.get(c),errors="coerce")
 
-    screened,_=build_scanner_funnel(px)
+    screened, funnel_diag = build_historical_funnel(px, as_of)
+    FUNNEL_DIAGNOSTICS.append(funnel_diag)
     if screened.empty:
         return []
 
@@ -388,7 +481,9 @@ def main():
          "method":"Production MBE score reproduced at PIT checkpoints; no post-checkpoint fundamentals used",
          "note":"A stock is considered 'detected before discovery' only if its production MBE score/gates clear at a checkpoint preceding its major run-up. This audit does not use the later winner outcome in the score.",
          "winners":th.to_dict(orient="records"),
-         "checkpoint_signals":rows}
+         "checkpoint_signals":rows,
+         "historical_funnel_diagnostics":FUNNEL_DIAGNOSTICS,
+         "leakage_guard":"Historical audit does not query current Chartink/Screener screens; current scanner outputs are reserved for live discovery."}
     json.dump(out,open("reports/multibagger-winner-audit.json","w"),indent=2,default=str)
     print(json.dumps(out,indent=2,default=str))
 
