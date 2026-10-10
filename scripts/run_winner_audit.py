@@ -4,7 +4,6 @@ import pandas as pd
 from core.market_data import nse_cross_section
 from core.nse_pit import NSEPIT
 from core.pit_store import load_facts
-from core.catalyst import NSECatalyst, ScreenerCatalyst, catalyst_score
 from multibagger.modules import score_fundamentals
 from multibagger.early_inflection import score_early_inflection
 from multibagger.firewall import apply_trap_firewall
@@ -307,37 +306,19 @@ def audit_date(as_of):
     ).head(n_mbe).copy()
     mbe_pool["mbe_rank"]=range(1,len(mbe_pool)+1)
 
-    # Catalyst is reported only for names that actually reach the production
-    # MBE pool. It is not allowed to alter the historical MBE score.
-    catmap={}
-    try:
-        cats=NSECatalyst(workers=4).batch(mbe_pool.symbol.tolist(),as_of)
-        for item in cats:
-            sym=item.get("symbol") or item.get("sym")
-            if sym:
-                catmap.setdefault(sym,[]).append(item)
-    except Exception:
-        pass
-    mbe_pool["catalyst_score"]=mbe_pool.symbol.map(
-        lambda s:catalyst_score(catmap.get(s,[]))
-    )
-    mbe_pool["catalyst_source"]=mbe_pool.symbol.map(
-        lambda s:
-        "NSE_PIT" if any(
-            i.get("source_type")=="NSE_CORPORATE_ANNOUNCEMENT"
-            for i in catmap.get(s,[])
-        ) else "SCREENER_NON_PIT"
-    )
+    # Current announcement endpoints cannot reconstruct archived historical
+    # catalyst evidence. Do not query live NSE/Screener pages in this PIT audit.
+    # Missing archived catalyst evidence is explicitly UNVERIFIED, not a score of 50.
+    catmap = {}
+    mbe_pool["catalyst_score"] = float("nan")
+    mbe_pool["catalyst_source"] = "NO_HISTORICAL_PIT_ARCHIVE"
 
-    # Production recalculates early-inflection after catalyst evidence is attached.
-    # Reproduce that step so early_watch/early_stage are based on the same fields.
-    ei_final=score_early_inflection(mbe_pool,mbe_pool,catmap)
-    for c in [
-        "order_visibility","capacity_inflection","structural_theme",
-        "early_inflection_score","early_stage"
-    ]:
+    # Early-stage diagnostics are provisional without archived PIT catalyst evidence.
+    ei_final = score_early_inflection(mbe_pool, mbe_pool, catmap)
+    for c in ["order_visibility", "capacity_inflection", "structural_theme",
+              "early_inflection_score", "early_stage"]:
         if c in ei_final:
-            mbe_pool[c]=ei_final[c].values
+            mbe_pool[c] = ei_final[c].values
 
     mbe_pool["six_month_return"]=mbe_pool["ret_126d"]
     mbe_pool["entry_stage"]=mbe_pool["ret_126d"].apply(
@@ -356,6 +337,7 @@ def audit_date(as_of):
         mbe_pool.fundamental_evidence.ge(.75)&
         mbe_pool.trap_firewall_pass&
         mbe_pool.pit_verified&
+        mbe_pool.catalyst_score.ge(60)&
         mbe_pool.six_month_return.le(.50)
     )
 
@@ -483,7 +465,9 @@ def main():
          "winners":th.to_dict(orient="records"),
          "checkpoint_signals":rows,
          "historical_funnel_diagnostics":FUNNEL_DIAGNOSTICS,
-         "leakage_guard":"Historical audit does not query current Chartink/Screener screens; current scanner outputs are reserved for live discovery."}
+         "leakage_guard":"Historical audit does not query current Chartink/Screener screens or live announcement pages; current scanner outputs are reserved for live discovery.",
+         "catalyst_validation_status":"UNVERIFIED_NO_HISTORICAL_PIT_ARCHIVE",
+         "production_gate_note":"Historical promotion is not credited without archived PIT catalyst evidence; this is a data limitation, not proof that a company lacked a catalyst."}
     json.dump(out,open("reports/multibagger-winner-audit.json","w"),indent=2,default=str)
     print(json.dumps(out,indent=2,default=str))
 
