@@ -12,7 +12,7 @@ on:
     - cron: "45 12 * * 1-5"
 concurrency:
   group: multibagger-live
-  cancel-in-progress: false
+  cancel-in-progress: true
 permissions:
   contents: write
 jobs:
