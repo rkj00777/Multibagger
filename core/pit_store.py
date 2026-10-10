@@ -14,7 +14,10 @@ def load_facts(as_of: str, root="data/pit/facts") -> pd.DataFrame:
                 if not line.strip(): continue
                 x=json.loads(line)
                 a=pd.to_datetime(x.get("available_at"),errors="coerce")
-                if pd.notna(a) and a<=cutoff:
+                p=pd.to_datetime(x.get("period_end"),errors="coerce")
+                # PIT eligibility requires both public availability and the
+                # accounting period itself to be no later than the decision date.
+                if pd.notna(a) and a<=cutoff and pd.notna(p) and p<=cutoff:
                     rows.append(x)
         except Exception:
             continue
