@@ -152,7 +152,10 @@ def _selection_lift_cluster_ci(out, n_boot=10000, seed=103):
     if d.empty:
         return {"status": "NO_VALID_DATE_CLUSTERS"}
     observed_diff = float((d.top_mean - d.all_mean).mean())
-    valid_ratio = d.loc[d.all_mean.abs() > 1e-12].copy()
+    # A ratio is interpretable as lift only when the baseline mean return is
+    # positive. Dividing two negative returns can make a worse strategy look
+    # like it has >1x "lift"; use excess return as the primary metric instead.
+    valid_ratio = d.loc[d.all_mean > 1e-12].copy()
     ratio = float((valid_ratio.top_mean / valid_ratio.all_mean).mean()) if not valid_ratio.empty else None
     rng = np.random.default_rng(seed)
     diffs, ratios = [], []
@@ -162,7 +165,7 @@ def _selection_lift_cluster_ci(out, n_boot=10000, seed=103):
         idx = rng.integers(0, len(d), len(d))
         diffs.append(float((top_arr[idx] - all_arr[idx]).mean()))
         den = all_arr[idx]
-        mask = np.abs(den) > 1e-12
+        mask = den > 1e-12
         if mask.any():
             ratios.append(float(np.mean(top_arr[idx][mask] / den[mask])))
     return {
@@ -175,7 +178,9 @@ def _selection_lift_cluster_ci(out, n_boot=10000, seed=103):
         "ratio_ci_low_where_valid": float(np.quantile(ratios, .025)) if ratios else None,
         "ratio_ci_high_where_valid": float(np.quantile(ratios, .975)) if ratios else None,
         "ratio_valid_denominator_dates": int(len(valid_ratio)),
-        "denominator_near_zero": bool(len(valid_ratio) < len(d)),
+        "ratio_denominator_excluded_dates": int(len(d) - len(valid_ratio)),
+        "ratio_interpretation": "Reported only for dates with positive baseline mean return; excess return is the primary comparison.",
+        "denominator_near_zero": bool((d.all_mean.abs() <= 1e-12).any()),
     }
 
 
@@ -298,13 +303,20 @@ def validate(months, top_n=25):
     allr = out.forward_return.dropna()
 
     statistical = _statistical_validation(out)
+    top_mean = float(top.mean()) if len(top) else None
+    all_mean = float(allr.mean()) if len(allr) else None
+    excess_return = (top_mean - all_mean) if top_mean is not None and all_mean is not None else None
+    relative_return_ratio = (top_mean / all_mean) if top_mean is not None and all_mean is not None and all_mean > 1e-12 else None
+
     return {
         "status": "PIT_MODULE_VALIDATION_COMPLETE",
         "observations": int(len(out)),
         "decision_dates": int(out.decision_date.nunique()),
-        "top_quartile_forward_return": float(top.mean()) if len(top) else None,
-        "all_forward_return": float(allr.mean()) if len(allr) else None,
-        "selection_lift": float(top.mean() / allr.mean()) if len(top) and len(allr) and allr.mean() != 0 else None,
+        "top_quartile_forward_return": top_mean,
+        "all_forward_return": all_mean,
+        "selection_lift": excess_return,
+        "selection_lift_definition": "top-quartile mean forward return minus all-observation mean forward return",
+        "relative_return_ratio": relative_return_ratio,
         "positive_hit_rate": float((top > 0).mean()) if len(top) else None,
         "next_step": "statistical gate: clustered bootstrap confidence intervals + two-sided permutation tests + Benjamini-Hochberg FDR",
         "pit_source": "NSE PIT store plus dynamic NSE PIT fallback",
