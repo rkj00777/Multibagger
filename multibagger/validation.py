@@ -252,6 +252,14 @@ def _statistical_validation(out):
 
 def validate(months, top_n=25):
     rows = []
+    date_diagnostics = []
+    # Historical backtests use only locally archived PIT facts by default.
+    # Live NSE requests are useful for current ingestion, but doing hundreds of
+    # ad-hoc network lookups inside a historical backtest is slow, rate-limited,
+    # and makes coverage hard to reproduce. Enable only for a deliberate audit.
+    use_dynamic_pit_fallback = str(
+        __import__("os").getenv("MBE_ENABLE_DYNAMIC_PIT_FALLBACK", "0")
+    ).strip().lower() in {"1", "true", "yes"}
     for as_of in months:
         px = nse_cross_section(as_of)
         if px.empty:
@@ -265,6 +273,14 @@ def validate(months, top_n=25):
             (px.avg_turnover_60d >= 2_000_000) & px.ret_126d.notna()
         ].nlargest(top_n, "technical")
         facts_df = load_facts(as_of)
+        diag = {
+            "decision_date": as_of,
+            "price_universe_symbols": int(px.symbol.nunique()),
+            "liquid_price_pool": int(len(pool)),
+            "local_pit_fact_rows": int(len(facts_df)),
+            "local_pit_symbols": int(facts_df.symbol.nunique()) if not facts_df.empty else 0,
+            "dynamic_pit_fallback_enabled": bool(use_dynamic_pit_fallback),
+        }
         facts = (
             facts_df[facts_df.symbol.isin(pool.symbol)]
             if not facts_df.empty
@@ -272,7 +288,9 @@ def validate(months, top_n=25):
         )
         pit_symbols = set(facts.symbol.astype(str).unique()) if not facts.empty else set()
         missing = [s for s in pool.symbol.astype(str).tolist() if s not in pit_symbols]
-        if missing:
+        diag["pool_symbols_with_local_pit_facts"] = int(len(pool) - len(missing))
+        diag["pool_symbols_missing_local_pit_facts"] = int(len(missing))
+        if missing and use_dynamic_pit_fallback:
             try:
                 dyn = NSEPIT()
                 rows_dyn = []
@@ -287,14 +305,27 @@ def validate(months, top_n=25):
             except Exception:
                 pass
 
+        diag["pit_fact_rows_after_optional_fallback"] = int(len(facts))
+        diag["pit_symbols_after_optional_fallback"] = int(facts.symbol.nunique()) if not facts.empty else 0
         fs = score_fundamentals(
             pool,
             facts.to_dict(orient="records") if isinstance(facts, pd.DataFrame) else facts,
         )
+        diag["fundamental_scored_symbols"] = int(fs.symbol.nunique()) if not fs.empty else 0
         if fs.empty:
+            diag.update({
+                "forward_price_symbols": 0,
+                "usable_observations": 0,
+                "status": "NO_FUNDAMENTAL_SCORES",
+            })
+            date_diagnostics.append(diag)
             continue
         fr = forward_returns(fs.symbol.tolist(), as_of)
         z = fs.merge(fr, on="symbol", how="inner")
+        diag["forward_price_symbols"] = int(fr.symbol.nunique()) if not fr.empty else 0
+        diag["usable_observations"] = int(z.forward_return.notna().sum()) if "forward_return" in z else 0
+        diag["status"] = "OK" if diag["usable_observations"] else "NO_FORWARD_RETURN"
+        date_diagnostics.append(diag)
         z["fundamental_score"] = z[MODULES].mean(axis=1, skipna=True)
         z["fundamental_module_count"] = z[MODULES].notna().sum(axis=1)
         z["decision_date"] = as_of
@@ -304,7 +335,15 @@ def validate(months, top_n=25):
 
     out = pd.DataFrame(rows)
     if out.empty:
-        return {"status": "NO_VALIDATION_OBSERVATIONS"}
+        return {
+            "status": "INSUFFICIENT_PIT_COVERAGE",
+            "observations": 0,
+            "decision_dates": 0,
+            "pit_source": "LOCAL_ARCHIVED_PIT_STORE_ONLY",
+            "dynamic_pit_fallback_enabled": bool(use_dynamic_pit_fallback),
+            "date_diagnostics": date_diagnostics,
+            "next_step": "Backfill a timestamped free PIT fundamentals archive; do not substitute current fundamentals into historical dates.",
+        }
 
     missing = [c for c in REQUIRED_COLUMNS if c not in out.columns]
     if missing:
@@ -331,6 +370,8 @@ def validate(months, top_n=25):
         "relative_return_ratio": relative_return_ratio,
         "positive_hit_rate": float((top > 0).mean()) if len(top) else None,
         "next_step": "statistical gate: clustered bootstrap confidence intervals + two-sided permutation tests + Benjamini-Hochberg FDR",
-        "pit_source": "NSE PIT store plus dynamic NSE PIT fallback",
+        "pit_source": "LOCAL_ARCHIVED_PIT_STORE_ONLY" if not use_dynamic_pit_fallback else "LOCAL_ARCHIVED_PIT_STORE_PLUS_DYNAMIC_NSE_FALLBACK",
+        "dynamic_pit_fallback_enabled": bool(use_dynamic_pit_fallback),
+        "date_diagnostics": date_diagnostics,
         "statistical_validation": statistical,
     }
