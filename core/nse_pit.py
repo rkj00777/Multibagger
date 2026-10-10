@@ -165,6 +165,12 @@ class NSEPIT:
     def __init__(self, timeout=25, retries=4):
         self.timeout, self.retries = timeout, retries
         self.s = requests.Session()
+        # Cache filings and parsed XBRL per client so walk-forward validation
+        # does not refetch the same company filings at every decision date.
+        self._catalog_cache = {}
+        self._catalog_pages = {}
+        self._catalog_complete = set()
+        self._xbrl_cache = {}
         self.s.headers.update({
             "User-Agent": UA,
             "Accept": "application/json, text/plain, */*",
@@ -192,31 +198,81 @@ class NSEPIT:
         raise RuntimeError("NSE request failed")
 
     def catalog(self, symbol, as_of, page_size=100):
-        params = {
-            "type": "Integrated Filing- Financials",
-            "page": 1,
-            "size": page_size,
-            "index": "equities",
-            "period_ended": "all",
-            "symbol": symbol,
-        }
-        try:
-            payload = self._get(API, params=params).json()
-        except Exception:
-            return []
+        """Return filings available by as_of, paging backward when necessary.
+
+        NSE returns the newest filings first. A historical cutoff may therefore
+        require more than the first page. Cache raw rows across dates and fetch
+        enough pages to obtain at least eight eligible filings for this cutoff.
+        """
+        key = (str(symbol).upper(), int(page_size))
+        cached = self._catalog_cache.setdefault(key, [])
         cutoff = _dt(as_of + " 23:59:59")
-        rows = [x for x in _catalog_rows(payload)
-                if x.get("available_at") and _dt(x["available_at"]) <= cutoff
-                and x.get("period_end") and _dt(x["period_end"]) and _dt(x["period_end"]) <= cutoff]
-        rows.sort(key=lambda x: (x.get("period_end") or "", x.get("available_at") or ""), reverse=True)
+
+        def eligible(rows):
+            return [
+                x for x in rows
+                if x.get("available_at")
+                and _dt(x["available_at"])
+                and _dt(x["available_at"]) <= cutoff
+                and x.get("period_end")
+                and _dt(x["period_end"])
+                and _dt(x["period_end"]) <= cutoff
+            ]
+
+        max_pages = 20
+        while (
+            len(eligible(cached)) < 8
+            and key not in self._catalog_complete
+            and self._catalog_pages.get(key, 0) < max_pages
+        ):
+            page = self._catalog_pages.get(key, 0) + 1
+            params = {
+                "type": "Integrated Filing- Financials",
+                "page": page,
+                "size": page_size,
+                "index": "equities",
+                "period_ended": "all",
+                "symbol": symbol,
+            }
+            try:
+                payload = self._get(API, params=params).json()
+                batch = _catalog_rows(payload)
+            except Exception:
+                # Preserve any usable cached rows; do not turn an acquisition
+                # outage into fabricated or current-value fallback data.
+                self._catalog_complete.add(key)
+                break
+
+            known = {x.get("xbrl_url") for x in cached}
+            for row in batch:
+                if row.get("xbrl_url") not in known:
+                    cached.append(row)
+                    known.add(row.get("xbrl_url"))
+            self._catalog_pages[key] = page
+            if len(batch) < page_size:
+                self._catalog_complete.add(key)
+            if not batch:
+                self._catalog_complete.add(key)
+
+        rows = eligible(cached)
+        rows.sort(
+            key=lambda x: (x.get("period_end") or "", x.get("available_at") or ""),
+            reverse=True,
+        )
         return rows
 
     def facts(self, symbol, as_of, max_filings=8):
         facts = []
         for filing in self.catalog(symbol, as_of)[:max_filings]:
+            url = filing["xbrl_url"]
+            if url in self._xbrl_cache:
+                facts.extend(self._xbrl_cache[url])
+                continue
             try:
-                r = self._get(filing["xbrl_url"])
-                facts.extend(_parse_xbrl(r.content, filing))
+                r = self._get(url)
+                parsed = _parse_xbrl(r.content, filing)
+                self._xbrl_cache[url] = parsed
+                facts.extend(parsed)
             except Exception:
                 continue
         cutoff = _dt(as_of + " 23:59:59")
