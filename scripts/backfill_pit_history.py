@@ -16,7 +16,7 @@ from pathlib import Path
 import pandas as pd
 
 from core.market_data import nse_cross_section
-from core.nse_pit import NSEPIT
+from core.nse_historical_pit import NSEHistoricalPIT
 
 DEFAULT_DATES = [
     "2022-03-31", "2022-06-30", "2022-09-30", "2022-12-30",
@@ -45,12 +45,12 @@ def select_symbols(as_of: str, top_n: int) -> list[str]:
 
 
 def fetch_symbol_history(symbol: str, dates: list[str]) -> dict:
-    client = NSEPIT(timeout=25, retries=3)
+    client = NSEHistoricalPIT(timeout=45, delay=1.2, retries=4)
     facts = []
     errors = []
     for as_of in dates:
         try:
-            facts.extend(client.facts(symbol, as_of, max_filings=8) or [])
+            facts.extend(client.facts(symbol, as_of) or [])
         except Exception as exc:
             errors.append({"as_of": as_of, "error": type(exc).__name__})
     # A fact can be encountered at multiple checkpoints; dedupe by its full
@@ -60,7 +60,7 @@ def fetch_symbol_history(symbol: str, dates: list[str]) -> dict:
         key = (
             row.get("symbol"), row.get("metric"), row.get("period_end"),
             row.get("period_start"), row.get("available_at"),
-            row.get("value"), row.get("source_url"),
+            row.get("value"), row.get("source_url"), row.get("basis"),
         )
         unique[key] = row
     return {"symbol": symbol, "facts": list(unique.values()), "errors": errors}
@@ -91,7 +91,7 @@ def persist_facts(facts: list[dict], report: dict) -> int:
                 key = (
                     x.get("symbol"), x.get("metric"), x.get("period_end"),
                     x.get("period_start"), x.get("available_at"),
-                    x.get("value"), x.get("source_url"),
+                    x.get("value"), x.get("source_url"), x.get("basis"),
                 )
                 existing[key] = x
         before = len(existing)
@@ -99,7 +99,7 @@ def persist_facts(facts: list[dict], report: dict) -> int:
             key = (
                 x.get("symbol"), x.get("metric"), x.get("period_end"),
                 x.get("period_start"), x.get("available_at"),
-                x.get("value"), x.get("source_url"),
+                x.get("value"), x.get("source_url"), x.get("basis"),
             )
             existing[key] = x
         ordered = sorted(
@@ -119,7 +119,7 @@ def persist_facts(facts: list[dict], report: dict) -> int:
     report["fact_files"] = sorted(p.name for p in root.glob("*.jsonl"))
     manifest = Path("data/pit/manifest.json")
     manifest.write_text(json.dumps({
-        "source": "NSE_XBRL",
+        "source": "NSE_CORPORATE_FINANCIAL_RESULTS_XBRL",
         "pit_rule": "available_at <= decision_date AND period_end <= decision_date",
         "backfill_dates": report["decision_dates"],
         "symbols_selected_by_date": report["symbols_selected_by_date"],
@@ -167,6 +167,8 @@ def main():
     facts = [fact for result in results for fact in result["facts"]]
     report = {
         "status": "PIT_HISTORY_BACKFILL_COMPLETE",
+        "source_endpoint": "NSE /api/corporates-financial-results",
+        "source_coverage_note": "NSE XBRL documents before 2019 may be purged; missing facts are not replaced with current fundamentals.",
         "source": "NSE integrated filing/XBRL; free source",
         "pit_rule": "available_at <= decision_date AND period_end <= decision_date",
         "decision_dates": dates,
