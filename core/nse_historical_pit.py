@@ -209,7 +209,7 @@ def _parse_xbrl(xml_bytes, filing):
                 chosen = values[0]
         else:
             instants = [v for v in values if v["instant"]]
-            chosen = instants[-1] if instants else values[0]
+            chosen = sorted(instants, key=lambda v: (0 if v["context_id"].lower().startswith("one") else 1))[0] if instants else values[0]
 
         rows.append({
             "symbol": filing["symbol"], "metric": metric, "value": chosen["value"],
