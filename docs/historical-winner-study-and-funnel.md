@@ -13,6 +13,22 @@ The first leakage-safe implementation is now committed on `main`.
 
 **Readiness distinction:** the live scanner can execute and produce a shortlist, but this is not proof of multibagger predictive power. Historical statistical validation, catalyst archival coverage, and broad survivorship-safe historical universe coverage remain separate evidence gates. No scoring weights or production thresholds were loosened.
 
+## PIT coverage repair — 12 October 2026
+
+The first historical backfill used NSE's integrated-filing endpoint and returned facts for only 25 of 939 requested symbols. That was a successful job execution but an inadequate research dataset.
+
+A separate free adapter now uses NSE's public `/api/corporates-financial-results` endpoint, preserves each filing's publication timestamp, selects quarter-duration facts rather than year-to-date totals, excludes dimensioned segment facts, and prefers consolidated facts when present. It does not retry permanent 404s and does not substitute current fundamentals for purged historical documents. The practical XBRL window is treated as 2019 onward.
+
+The walk-forward schedule is expanded to quarterly checkpoints from 2019 through 2025. The validation output now labels each horizon as `INSUFFICIENT_INDEPENDENT_SAMPLE`, `NOT_VALIDATED`, or `EVIDENCE_PASS` using matured outcomes, at least eight independent dates, and positive excess return whose confidence interval excludes zero. A successful GitHub Actions run is not itself an investment-model pass.
+
+Implementation commits:
+- Historical NSE adapter: [3bb8381](https://github.com/rkj00777/Multibagger/commit/3bb8381a99055f5e9dd1dddb73a5c652c4e0306)
+- Use the historical endpoint in backfill: [193a75e](https://github.com/rkj00777/Multibagger/commit/193a75e09b2632fa926c32da73761abbe9c40bff)
+- Evidence-based validation statuses: [fcb2b30](https://github.com/rkj00777/Multibagger/commit/fcb2b30b0db507ea6bb18c43fb06591ae7fce7a8)
+- PIT parser tests passed in [CI #181](https://github.com/rkj00777/Multibagger/actions/runs/38289496042) and permanent-404 handling compiled/tested in [CI #186](https://github.com/rkj00777/Multibagger/actions/runs/38289694150).
+
+At the time of this update, the first backfill job using the new endpoint is still running and the full 2019–2025 backfill is queued. Historical coverage and predictive validity therefore remain unverified until those resulting artifacts are inspected.
+
 ## Purpose
 Use the 27 historical winners already recorded in `scripts/run_blind_historical_test.py` as a discovery/falsification set, not as hard-coded target names. Study both successful and failed candidates at decision dates before their major moves. Do not change MBE weights or gates from retrospective anecdotes.
 
