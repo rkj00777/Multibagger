@@ -34,6 +34,23 @@ def score_fundamentals(price_df,facts):
     f["available_at"]=pd.to_datetime(f.get("available_at"),errors="coerce")
     f=f[f["period_end"].notna()].copy()
 
+    # Prefer consolidated historical facts for each symbol/metric/period,
+    # falling back to standalone only when no consolidated value exists.
+    # Legacy live facts without a basis field remain unchanged.
+    if "basis" in f.columns:
+        f["_basis_norm"] = f["basis"].astype(str).str.lower()
+        keys = ["symbol", "metric", "period_end"]
+        consolidated_keys = set(
+            tuple(row) for row in f.loc[f["_basis_norm"].eq("consolidated"), keys]
+            .drop_duplicates().itertuples(index=False, name=None)
+        )
+        keep = []
+        for row in f[keys + ["_basis_norm"]].itertuples(index=False, name=None):
+            key = tuple(row[:3])
+            basis = row[3]
+            keep.append(key not in consolidated_keys or basis == "consolidated")
+        f = f.loc[keep].drop(columns=["_basis_norm"])
+
     p=f.pivot_table(index=["symbol","period_end"],columns="metric",values="value",aggfunc="last").reset_index()
     rows=[]
 
