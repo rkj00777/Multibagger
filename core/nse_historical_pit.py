@@ -229,18 +229,33 @@ class NSEHistoricalPIT:
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.session = requests.Session()
+        self.results_page = BASE + "/companies-listing/corporate-filings-financial-results"
         self.session.headers.update({
-            "User-Agent": UA, "Accept": "application/json, text/plain, */*",
-            "Accept-Language": "en-US,en;q=0.9", "Referer": BASE + "/",
+            "User-Agent": UA,
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Referer": self.results_page,
+            "Connection": "keep-alive",
+            "sec-fetch-dest": "empty",
+            "sec-fetch-mode": "cors",
+            "sec-fetch-site": "same-origin",
         })
         self._last_request = 0.0
         self._catalog = {}
         self._facts = {}
         self._xbrl = {}
+        self._primed = False
+        self._prime_session()
+
+    def _prime_session(self):
+        """Establish NSE's browser session from the actual filings page."""
         try:
-            self.session.get(BASE + "/", timeout=15)
-        except Exception:
-            pass
+            self.session.get(self.results_page, timeout=20)
+            self._primed = True
+        except requests.RequestException:
+            # The API request below remains authoritative; this is only a
+            # cookie/session bootstrap and must not fabricate a successful state.
+            self._primed = False
 
     def _get(self, url, params=None):
         last_error = None
@@ -256,9 +271,14 @@ class NSEHistoricalPIT:
             else:
                 if response.status_code == 200:
                     return response
+                if response.status_code in (401, 403) and attempt == 0:
+                    # NSE may return a bot/session denial when the API is called
+                    # without a page-scoped cookie. Re-prime once; do not retry
+                    # permanent filing/XBRL 404s or mask them as missing data.
+                    self._prime_session()
+                    last_error = RuntimeError(f"HTTP {response.status_code}; refreshed NSE session")
+                    continue
                 if response.status_code not in (429, 502, 503, 504):
-                    # A genuine 404/purge or other client error will not improve
-                    # with retries. The caller records it as missing evidence.
                     response.raise_for_status()
                 last_error = RuntimeError(f"HTTP {response.status_code}")
             if attempt < self.retries - 1:
