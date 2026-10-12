@@ -6,6 +6,7 @@ on:
       - ".github/workflows/multibagger-pit-history-backfill.yml"
       - "scripts/backfill_pit_history.py"
       - "core/nse_pit.py"
+      - "core/nse_historical_pit.py"
       - "core/market_data.py"
   workflow_dispatch:
 
