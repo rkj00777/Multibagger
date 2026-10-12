@@ -55,7 +55,7 @@ def fetch_symbol_history(symbol: str, dates: list[str]) -> dict:
         try:
             facts.extend(client.facts(symbol, as_of) or [])
         except Exception as exc:
-            errors.append({"as_of": as_of, "error": type(exc).__name__})
+            errors.append({"as_of": as_of, "error": type(exc).__name__, "detail": str(exc)[:240]})
     # A fact can be encountered at multiple checkpoints; dedupe by its full
     # filing/period identity while preserving revisions with different dates.
     unique = {}
@@ -163,22 +163,29 @@ def main():
                 results.append(result)
                 errors.extend([{"symbol": symbol, **e} for e in result["errors"]])
             except Exception as exc:
-                errors.append({"symbol": symbol, "error": type(exc).__name__})
+                errors.append({"symbol": symbol, "error": type(exc).__name__, "detail": str(exc)[:240]})
             if i % 25 == 0:
                 print(f"symbols_done={i}/{len(futures)}", flush=True)
 
     facts = [fact for result in results for fact in result["facts"]]
+    symbols_with_facts = sum(bool(r["facts"]) for r in results)
+    symbols_with_errors = len({e.get("symbol") for e in errors if e.get("symbol")})
+    coverage_ratio = symbols_with_facts / len(symbol_dates) if symbol_dates else 0.0
     report = {
-        "status": "PIT_HISTORY_BACKFILL_COMPLETE",
+        "status": "PIT_HISTORY_BACKFILL_COMPLETE" if coverage_ratio >= 0.50 else "PIT_HISTORY_BACKFILL_INSUFFICIENT_COVERAGE",
         "source_endpoint": "NSE /api/corporates-financial-results",
         "source_coverage_note": "NSE XBRL documents before 2019 may be purged; missing facts are not replaced with current fundamentals.",
-        "source": "NSE integrated filing/XBRL; free source",
+        "source": "NSE corporate financial-results/XBRL; free source",
         "pit_rule": "available_at <= decision_date AND period_end <= decision_date",
         "decision_dates": dates,
         "top_n_per_date": int(args.top_n),
         "symbols_selected_by_date": {d: len(v) for d, v in selected_by_date.items()},
         "unique_symbols_requested": len(symbol_dates),
-        "symbols_with_facts": sum(bool(r["facts"]) for r in results),
+        "symbols_with_facts": symbols_with_facts,
+        "symbols_with_errors": symbols_with_errors,
+        "symbols_without_facts_or_errors": max(0, len(symbol_dates) - symbols_with_facts - symbols_with_errors),
+        "coverage_ratio": coverage_ratio,
+        "minimum_coverage_ratio_for_complete_status": 0.50,
         "facts_received": len(facts),
         "error_count": len(errors),
         "errors_sample": errors[:100],
