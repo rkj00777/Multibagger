@@ -403,13 +403,24 @@ def validate(months, top_n=25):
             continue
         stats = _statistical_validation(frame)
         lift = stats.get("selection_lift_ci", {})
+        independent_dates = int(valid.decision_date.nunique())
+        ci_low = lift.get("difference_ci_low")
+        lift_mean = lift.get("difference_in_means")
+        if independent_dates < 8:
+            evidence_status = "INSUFFICIENT_INDEPENDENT_SAMPLE"
+        elif lift_mean is None or ci_low is None or lift_mean <= 0 or ci_low <= 0:
+            evidence_status = "NOT_VALIDATED"
+        else:
+            evidence_status = "EVIDENCE_PASS"
         horizon_validation[label] = {
-            "status": "OK",
+            "status": evidence_status,
             "observations": int(len(valid)),
-            "decision_dates": int(valid.decision_date.nunique()),
+            "decision_dates": independent_dates,
             "top_quartile_forward_return": lift.get("top_quartile_mean"),
             "all_forward_return": lift.get("all_mean"),
-            "selection_lift": lift.get("difference_in_means"),
+            "selection_lift": lift_mean,
+            "selection_lift_ci_low": ci_low,
+            "selection_lift_ci_high": lift.get("difference_ci_high"),
             "positive_hit_rate": lift.get("top_quartile_positive_hit_rate"),
             "relative_return_ratio": (
                 lift.get("top_quartile_mean") / lift.get("all_mean")
@@ -429,7 +440,8 @@ def validate(months, top_n=25):
     relative_return_ratio = primary.get("relative_return_ratio")
 
     return {
-        "status": "PIT_MODULE_VALIDATION_COMPLETE",
+        "status": primary.get("status", "INSUFFICIENT_PIT_COVERAGE"),
+        "validation_scope": "historical PIT fundamental ranking; descriptive until each horizon clears independent-date and confidence-interval gates",
         "observations": int(len(out)),
         "decision_dates": int(out.decision_date.nunique()),
         "top_quartile_forward_return": top_mean,
