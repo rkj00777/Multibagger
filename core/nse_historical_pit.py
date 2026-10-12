@@ -251,13 +251,16 @@ class NSEHistoricalPIT:
             self._last_request = time.monotonic()
             try:
                 response = self.session.get(url, params=params, timeout=self.timeout)
+            except requests.RequestException as exc:
+                last_error = exc
+            else:
                 if response.status_code == 200:
                     return response
-                last_error = RuntimeError(f"HTTP {response.status_code}")
                 if response.status_code not in (429, 502, 503, 504):
+                    # A genuine 404/purge or other client error will not improve
+                    # with retries. The caller records it as missing evidence.
                     response.raise_for_status()
-            except Exception as exc:
-                last_error = exc
+                last_error = RuntimeError(f"HTTP {response.status_code}")
             if attempt < self.retries - 1:
                 time.sleep((2, 5, 12)[min(attempt, 2)])
         raise RuntimeError(f"NSE request failed: {last_error}")
@@ -279,7 +282,9 @@ class NSEHistoricalPIT:
         rows = []
         for filing in self.filings(symbol):
             available = _date(filing["available_at"])
-            if not available or available > cutoff:
+            # NSE's XBRL documents are known to be purged before 2019. Avoid
+            # retrying guaranteed misses; 2019 onward remains timestamped.
+            if not available or available.year < 2019 or available > cutoff:
                 continue
             url = filing["xbrl_url"]
             if url not in self._xbrl:
