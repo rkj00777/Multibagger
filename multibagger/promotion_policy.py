@@ -28,14 +28,9 @@ def production_validation_status(path="reports/multibagger-pit-validation.json")
         return {"approved": False, "reason": "HORIZON_VALIDATION_MISSING", "independent_dates": {}}
 
     # The fundamental and MBE-composite proxy tests do not include a complete
-    # historical catalyst archive. Never promote the full live engine until
-    # timestamped catalyst materiality has also been independently validated.
-    if report.get("full_model_validation_status") != "FULL_MODEL_VALIDATED":
-        return {
-            "approved": False,
-            "reason": "FULL_MODEL_VALIDATION_INCOMPLETE_HISTORICAL_CATALYST_ARCHIVE",
-            "independent_dates": {},
-        }
+    # historical catalyst archive. Record this as an independent blocking reason
+    # while preserving diagnostics for the sample-size and return gates below.
+    full_model_validated = report.get("full_model_validation_status") == "FULL_MODEL_VALIDATED"
 
     dates = {}
     reasons = []
@@ -66,6 +61,8 @@ def production_validation_status(path="reports/multibagger-pit-validation.json")
         if lift_low is None or lift_low <= 0:
             reasons.append(f"{horizon}:LIFT_CONFIDENCE_INTERVAL_NOT_POSITIVE")
 
+    if not full_model_validated:
+        reasons.append("FULL_MODEL_VALIDATION_INCOMPLETE_HISTORICAL_CATALYST_ARCHIVE")
     approved = not reasons and report.get("status") == "VALIDATED_FOR_PRODUCTION"
     if not approved and not reasons:
         reasons.append(f"REPORT_STATUS_{report.get('status', 'MISSING')}")
