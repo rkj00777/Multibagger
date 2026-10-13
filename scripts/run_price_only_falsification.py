@@ -56,19 +56,18 @@ def _evaluate(as_of: str) -> dict:
     x["selected"] = x.score >= x.score.quantile(.90)
     fut = _future_prices(as_of)
     rows = []
+    x["symbol_key"] = x.symbol.astype(str).str.upper()
+    x_by_symbol = x.drop_duplicates("symbol_key").set_index("symbol_key")
     for symbol, g in fut.groupby("symbol", sort=False):
-        if symbol not in set(x.symbol.astype(str).str.upper()):
+        if symbol not in x_by_symbol.index:
             continue
         g = g.sort_values("date")
-        # Require one close on/before decision date and future sessions after it.
-        pre = g[g.date <= pd.Timestamp(as_of)]
-        post = g[g.date > pd.Timestamp(as_of)]
-        if pre.empty or post.empty:
+        post = g[g.date > pd.Timestamp(as_of)].reset_index(drop=True)
+        if post.empty:
             continue
-        p0 = float(pre.iloc[-1].close)
+        p0 = float(x_by_symbol.loc[symbol, "close"])
         if p0 <= 0: continue
-        post = post.reset_index(drop=True)
-        selected = bool(x.loc[x.symbol.astype(str).str.upper().eq(symbol), "selected"].iloc[0])
+        selected = bool(x_by_symbol.loc[symbol, "selected"])
         row = {"symbol":symbol,"selected":selected,"entry":p0}
         for label,n in HORIZONS.items():
             if len(post) >= n:
