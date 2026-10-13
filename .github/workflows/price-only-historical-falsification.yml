@@ -1,0 +1,28 @@
+name: Price-only Historical Falsification
+on:
+  push:
+    branches: [main]
+    paths:
+      - "scripts/run_price_only_falsification.py"
+      - ".github/workflows/price-only-historical-falsification.yml"
+  workflow_dispatch:
+concurrency:
+  group: price-only-historical-falsification
+  cancel-in-progress: true
+jobs:
+  falsification:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Run price-only historical falsification
+        run: PYTHONPATH=. python scripts/run_price_only_falsification.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: price-only-historical-falsification
+          path: reports/price-only-historical-falsification.json
