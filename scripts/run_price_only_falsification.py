@@ -15,7 +15,7 @@ import pandas as pd
 import duckdb
 from core.market_data import nse_cross_section, _url
 
-DATES = pd.date_range("2012-03-30", "2023-03-31", freq="QE").strftime("%Y-%m-%d").tolist()
+DATES = pd.date_range("2012-03-30", "2023-03-31", freq="2QE").strftime("%Y-%m-%d").tolist()
 HORIZONS = {"6m_126_sessions":126, "12m_252_sessions":252, "24m_504_sessions":504}
 BOOTSTRAPS = 5000
 SEED = 617
