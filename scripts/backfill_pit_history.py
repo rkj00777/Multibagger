@@ -210,7 +210,9 @@ def main():
         encoding="utf-8")
     symbols_with_facts = sum(bool(r["facts"]) for r in results)
     symbols_with_errors = len({e.get("symbol") for e in errors if e.get("symbol")})
-    coverage_ratio = symbols_with_facts / len(symbol_dates) if symbol_dates else 0.0
+    requested_symbol_date_combinations = sum(len(v) for v in symbol_dates.values())
+    eligible_symbol_date_combinations = max(0, requested_symbol_date_combinations - len(exclusions))
+    coverage_ratio = eligible_symbol_date_combinations / requested_symbol_date_combinations if requested_symbol_date_combinations else 0.0
     report = {
         "status": "PIT_HISTORY_BACKFILL_COMPLETE" if coverage_ratio >= 0.50 else "PIT_HISTORY_BACKFILL_INSUFFICIENT_COVERAGE",
         "source_endpoint": "NSE /api/corporates-financial-results plus BSE /BseIndiaAPI/api/AnnSubCategoryGetData/w and official CorpXbrlGen.aspx attachments",
@@ -222,6 +224,9 @@ def main():
         "top_n_per_date": int(args.top_n),
         "symbols_selected_by_date": {d: len(v) for d, v in selected_by_date.items()},
         "unique_symbols_requested": len(symbol_dates),
+        "symbols_with_any_timestamped_facts": symbols_with_facts,
+        "requested_symbol_date_combinations": requested_symbol_date_combinations,
+        "eligible_symbol_date_combinations": eligible_symbol_date_combinations,
         "symbols_with_facts": symbols_with_facts,
         "symbols_with_errors": symbols_with_errors,
         "symbols_without_facts_or_errors": max(0, len(symbol_dates) - symbols_with_facts - symbols_with_errors),
