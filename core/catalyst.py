@@ -1,118 +1,198 @@
-import requests,re
-from datetime import datetime,timedelta
-from concurrent.futures import ThreadPoolExecutor,as_completed
+import re
+import requests
+from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
-BASE="https://www.nseindia.com"
-URL=BASE+"/api/corporate-announcements"
+BASE = "https://www.nseindia.com"
+URL = BASE + "/api/corporate-announcements"
 
-POSITIVE=("order","orders","capacity","expansion","commission","approval","contract","fund","acquisition","export","product","award","partnership","capex","facility","investment","inaugurat","production","launch")
-NEGATIVE=("resign","default","fraud","pledge","downgrade","delay","fire","insolvency","penalty","search","investigation","forensic","warning","loss of control")
-NEUTRAL=("result","board meeting","dividend","annual general meeting","credit rating")
+# Terms are used only to classify commitment quality, never to award positive
+# credit by themselves.
+PROMOTIONAL = (
+    r"\\b(non[- ]binding|exploratory|expression of interest|in principle|"
+    r"proposed|proposal|strategic intent|subject to definitive agreement|"
+    r"memorandum of understanding|\\bmou\\b|letter of intent|\\bloi\\b|"
+    r"pilot project|feasibility study|discussions with|in talks with)\\b"
+)
+BINDING = (
+    r"\\b(purchase order|work order|binding contract|contract awarded|"
+    r"order received|firm order|definitive agreement|letter of award|"
+    r"award of contract|contract signed|\\bloa\\b)\\b"
+)
+NEGATIVE = (
+    "resign", "default", "fraud", "pledge invocation", "downgrade", "delay",
+    "cancelled", "canceled", "termination", "insolvency", "penalty",
+    "investigation", "forensic", "wilful defaulter", "order withdrawn"
+)
+DATE_KEYS = ("available_at", "broadcast_datetime", "announcement_date",
+             "announcementDate", "an_dt", "date", "dateTime", "timestamp")
+TEXT_KEYS = ("text", "desc", "description", "subject", "title", "headline",
+             "details", "attchmntText", "announcement", "purpose")
+VALUE_KEYS = ("contract_value_cr", "order_value_cr", "order_value_crore",
+              "contract_value_crore", "order_value", "contract_value")
+REVENUE_KEYS = ("annual_revenue_cr", "revenue_cr", "annual_revenue",
+                "revenue")
+CUSTOMER_KEYS = ("customer_name", "client_name", "named_customer", "counterparty")
+OFFICIAL_TYPES = {"NSE_CORPORATE_ANNOUNCEMENT", "BSE_CORPORATE_ANNOUNCEMENT",
+                  "NSE_XBRL", "BSE_XBRL", "OFFICIAL_EXCHANGE_FILING"}
 
-class NSECatalyst:
-    def __init__(self,workers=8):
-        self.s=requests.Session()
-        self.s.headers.update({"User-Agent":"Mozilla/5.0","Accept":"application/json, text/plain, */*","Referer":BASE+"/"})
-        self.workers=workers
-        try:self.s.get(BASE+"/",timeout=15)
-        except:pass
-
-    def one(self,symbol,as_of):
-        try:
-            d=datetime.strptime(as_of,"%Y-%m-%d")
-            p={"index":"equities","symbol":symbol,
-               "from_date":(d-timedelta(days=45)).strftime("%d-%m-%Y"),
-               "to_date":d.strftime("%d-%m-%Y"),"page":1,"size":50}
-            r=self.s.get(URL,params=p,timeout=15)
-            if not r.ok:return []
-            data=r.json()
-            rows=data.get("data",data if isinstance(data,list) else [])
-            out=[]
-            for x in rows:
-                if isinstance(x,dict):
-                    y=dict(x)
-                    y["symbol"]=y.get("symbol") or y.get("sym") or symbol
-                    y["source_type"]="NSE_CORPORATE_ANNOUNCEMENT"
-                    out.append(y)
-                else:
-                    out.append({"symbol":symbol,"text":str(x),"source_type":"NSE_CORPORATE_ANNOUNCEMENT"})
-            return out
-        except:return []
-
-    def batch(self,symbols,as_of):
-        out=[]
-        symbols=[str(s).upper() for s in symbols]
-        with ThreadPoolExecutor(max_workers=self.workers) as ex:
-            fut={ex.submit(self.one,s,as_of):s for s in symbols}
-            for f in as_completed(fut):
-                try: out.extend(f.result() or [])
-                except:pass
-
-        # NSE can be blocked/rate-limited from hosted runners. Fill only missing
-        # symbols from the public Screener announcements page; this is discovery
-        # evidence, never a substitute for PIT fundamentals.
-        got={str(x.get("symbol")).upper() for x in out if x.get("symbol")}
-        missing=[s for s in symbols if s not in got]
-        if missing:
-            try:
-                fallback=ScreenerCatalyst(workers=min(4,len(missing))).batch(missing,as_of)
-                out.extend(fallback)
-            except Exception:pass
-        return out
 
 def _item_text(item):
-    if isinstance(item,dict):
-        vals=[]
-        for k in ("text","desc","description","subject","title","headline","details","attchmntText","announcement","purpose"):
-            if item.get(k) is not None: vals.append(str(item.get(k)))
-        return " ".join(vals)
-    return str(item)
+    if isinstance(item, dict):
+        return " ".join(str(item[k]) for k in TEXT_KEYS if item.get(k) is not None)
+    return str(item or "")
 
-def catalyst_score(items):
-    if not items:return 50.0
-    positive=negative=0
-    evidence=0
-    for item in items:
-        text=_item_text(item).lower()
-        if not text.strip():continue
-        evidence+=1
-        positive += sum(text.count(k) for k in POSITIVE)
-        negative += sum(text.count(k) for k in NEGATIVE)
-    if evidence==0:return 50.0
-    # Saturating evidence score: a genuine cluster of positive corporate events
-    # can move the score materially, while repeated boilerplate cannot dominate.
-    raw=50 + min(40,8*positive) - min(50,15*negative)
-    return float(max(0,min(100,raw)))
 
-class ScreenerCatalyst:
-    def __init__(self,workers=8):
-        self.workers=workers
-        self.s=requests.Session()
-        self.s.headers.update({"User-Agent":"Mozilla/5.0","Accept":"text/html,application/xhtml+xml"})
-
-    def one(self,symbol,as_of):
+def _number(item, keys):
+    if not isinstance(item, dict):
+        return None
+    for key in keys:
+        value = item.get(key)
+        if value is None or isinstance(value, bool):
+            continue
         try:
-            from bs4 import BeautifulSoup
-            u=f"https://www.screener.in/company/{symbol}/"
-            r=self.s.get(u,timeout=10)
-            if not r.ok:return []
-            soup=BeautifulSoup(r.text,"html.parser")
-            text=soup.get_text(" ",strip=True)
-            # Prefer the public announcements/documents block. Limit text so
-            # unrelated historical page content cannot manufacture a catalyst.
-            m=re.search(r"Announcements(.*?)Annual reports",text,re.I|re.S)
-            block=m.group(1) if m else text[-12000:]
-            if not block.strip():return []
-            return [{"symbol":symbol,"text":block,
-                     "source_type":"SCREENER_PUBLIC_FALLBACK",
-                     "source_url":u,"as_of":as_of}]
-        except:return []
+            value = float(str(value).replace(",", "").replace("₹", "").strip())
+            if value >= 0:
+                return value
+        except (TypeError, ValueError):
+            continue
+    return None
 
-    def batch(self,symbols,as_of):
-        out=[]
+
+def _has_customer(item):
+    if not isinstance(item, dict):
+        return False
+    return any(str(item.get(k, "")).strip() for k in CUSTOMER_KEYS)
+
+
+def _date_value(item):
+    if not isinstance(item, dict):
+        return None
+    for key in DATE_KEYS:
+        value = item.get(key)
+        if value is None or not str(value).strip():
+            continue
+        if isinstance(value, (int, float)):
+            try:
+                return datetime.utcfromtimestamp(float(value)).date()
+            except (ValueError, OverflowError, OSError):
+                continue
+        raw = str(value).strip()
+        for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y",
+                    "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f",
+                    "%d-%b-%Y", "%d-%b-%Y %H:%M:%S"):
+            try:
+                return datetime.strptime(raw[:26], fmt).date()
+            except ValueError:
+                pass
+        try:
+            return datetime.fromisoformat(raw.replace("Z", "+00:00")).date()
+        except ValueError:
+            pass
+    return None
+
+
+def assess_catalyst(items, as_of=None):
+    """Conservative, explainable materiality gate. Missing evidence is unknown, not positive."""
+    as_of_date = datetime.strptime(as_of, "%Y-%m-%d").date() if as_of else datetime.utcnow().date()
+    if not items:
+        return {"score": 20.0, "status": "NO_VERIFIABLE_CATALYST",
+                "materiality_ratio": None, "reasons": ["No retrievable catalyst evidence"],
+                "verified_events": 0, "excluded_events": 0}
+    assessments = []
+    excluded = 0
+    for item in items:
+        text = _item_text(item).lower()
+        if not text.strip():
+            excluded += 1
+            continue
+        source_type = str(item.get("source_type", "")).upper() if isinstance(item, dict) else ""
+        event_date = _date_value(item)
+        official = source_type in OFFICIAL_TYPES
+        timestamp_ok = event_date is not None and event_date <= as_of_date
+        if not official or not timestamp_ok:
+            excluded += 1
+            continue
+        if any(term in text for term in NEGATIVE):
+            assessments.append({"kind": "negative", "ratio": None, "reasons": ["Negative event keyword in timestamped official filing"]})
+            continue
+        if re.search(PROMOTIONAL, text, re.I) and not re.search(BINDING, text, re.I):
+            assessments.append({"kind": "promotional", "ratio": None, "reasons": ["Non-binding, exploratory, MoU/LOI or proposal language; no positive credit"]})
+            continue
+        if not re.search(BINDING, text, re.I):
+            assessments.append({"kind": "unverified", "ratio": None, "reasons": ["No explicit binding order/contract evidence"]})
+            continue
+        order_value = _number(item, VALUE_KEYS)
+        revenue = _number(item, REVENUE_KEYS)
+        ratio = order_value / revenue if order_value is not None and revenue and revenue > 0 else None
+        customer = _has_customer(item)
+        if ratio is not None and ratio >= 0.20 and customer:
+            assessments.append({"kind": "material", "ratio": ratio, "reasons": ["Binding evidence", "Disclosed value is at least 20% of disclosed annual revenue", "Named customer field present"]})
+        elif ratio is not None and ratio < 0.20:
+            assessments.append({"kind": "immaterial", "ratio": ratio, "reasons": ["Binding evidence but disclosed value is below 20% of annual revenue"]})
+        else:
+            assessments.append({"kind": "incomplete", "ratio": ratio, "reasons": ["Binding language found but value/revenue denominator or named customer evidence is incomplete"]})
+    if not assessments:
+        return {"score": 20.0, "status": "UNVERIFIED_OR_STALE_EVIDENCE",
+                "materiality_ratio": None, "reasons": ["Evidence missing official source type or timestamp at/before decision date"],
+                "verified_events": 0, "excluded_events": excluded}
+    priority = {"negative": 0, "material": 5, "immaterial": 4, "incomplete": 3, "promotional": 2, "unverified": 1}
+    best = sorted(assessments, key=lambda x: priority[x["kind"]])[0]
+    score_map = {"material": 85.0, "immaterial": 45.0, "incomplete": 40.0,
+                 "promotional": 20.0, "unverified": 25.0, "negative": 0.0}
+    return {"score": score_map[best["kind"]], "status": best["kind"].upper(),
+            "materiality_ratio": best["ratio"], "reasons": best["reasons"],
+            "verified_events": len(assessments), "excluded_events": excluded}
+
+
+def catalyst_score(items, as_of=None):
+    # Compatibility wrapper: unlike the previous keyword counter, positive
+    # scores require timestamped official evidence and a verifiable commitment.
+    return float(assess_catalyst(items, as_of)["score"])
+
+
+class NSECatalyst:
+    def __init__(self, workers=8):
+        self.s = requests.Session()
+        self.s.headers.update({"User-Agent": "Mozilla/5.0", "Accept": "application/json, text/plain, */*", "Referer": BASE + "/"})
+        self.workers = workers
+        try:
+            self.s.get(BASE + "/", timeout=15)
+        except Exception:
+            pass
+
+    def one(self, symbol, as_of):
+        try:
+            d = datetime.strptime(as_of, "%Y-%m-%d")
+            p = {"index": "equities", "symbol": symbol,
+                 "from_date": (d - timedelta(days=45)).strftime("%d-%m-%Y"),
+                 "to_date": d.strftime("%d-%m-%Y"), "page": 1, "size": 50}
+            r = self.s.get(URL, params=p, timeout=15)
+            if not r.ok:
+                return []
+            data = r.json()
+            rows = data.get("data", data if isinstance(data, list) else [])
+            out = []
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                item = dict(row)
+                item["symbol"] = item.get("symbol") or item.get("sym") or symbol
+                item["source_type"] = "NSE_CORPORATE_ANNOUNCEMENT"
+                out.append(item)
+            return out
+        except Exception:
+            return []
+
+    def batch(self, symbols, as_of):
+        out = []
         with ThreadPoolExecutor(max_workers=self.workers) as ex:
-            fut={ex.submit(self.one,s,as_of):s for s in symbols}
-            for f in as_completed(fut):
-                try:out.extend(f.result() or [])
-                except:pass
+            futures = [ex.submit(self.one, str(s).upper(), as_of) for s in symbols]
+            for future in as_completed(futures):
+                try:
+                    out.extend(future.result() or [])
+                except Exception:
+                    pass
+        # Deliberately no Screener fallback for catalyst approval: current page
+        # text is not a reliable timestamped primary-source event archive.
         return out
