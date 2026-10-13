@@ -156,8 +156,10 @@ class NSECatalyst:
         self.s = requests.Session()
         self.s.headers.update({"User-Agent": "Mozilla/5.0", "Accept": "application/json, text/plain, */*", "Referer": BASE + "/"})
         self.workers = workers
+        self.s.headers.update({"Accept-Language": "en-US,en;q=0.9", "Origin": BASE})
         try:
-            self.s.get(BASE + "/", timeout=15)
+            # Prime the public filings page used by the exchange UI before its JSON endpoint.
+            self.s.get(BASE + "/companies-listing/corporate-filings-announcements", timeout=15)
         except Exception:
             pass
 
@@ -169,9 +171,10 @@ class NSECatalyst:
                  "to_date": d.strftime("%d-%m-%Y"), "page": 1, "size": 50}
             r = self.s.get(URL, params=p, timeout=15)
             if not r.ok:
-                return []
+                return [{"symbol": symbol, "source_type": "NSE_RETRIEVAL_ERROR",
+                         "retrieval_error": "HTTP_" + str(r.status_code), "text": ""}]
             data = r.json()
-            rows = data.get("data", data if isinstance(data, list) else [])
+            rows = data if isinstance(data, list) else data.get("data", [])
             out = []
             for row in rows:
                 if not isinstance(row, dict):
@@ -181,8 +184,9 @@ class NSECatalyst:
                 item["source_type"] = "NSE_CORPORATE_ANNOUNCEMENT"
                 out.append(item)
             return out
-        except Exception:
-            return []
+        except Exception as exc:
+            return [{"symbol": symbol, "source_type": "NSE_RETRIEVAL_ERROR",
+                     "retrieval_error": type(exc).__name__, "text": ""}]
 
     def batch(self, symbols, as_of):
         out = []
