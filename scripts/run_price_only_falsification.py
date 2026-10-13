@@ -78,9 +78,12 @@ def _evaluate(as_of: str) -> dict:
                 if label == "6m_126_sessions":
                     row["max_drawdown_6m"] = float(np.nanmin(dd))
                 # first hit based on post-entry closes, in sessions
-                hit2 = np.flatnonzero(post.close.to_numpy(float) >= 2*p0)
-                hit3 = np.flatnonzero(post.close.to_numpy(float) >= 3*p0)
                 if label == "6m_126_sessions":
+                    # Time-to-hit is strictly measured inside the first 126
+                    # future sessions, not across the full 24-month price path.
+                    first_126 = post.close.to_numpy(float)[:126]
+                    hit2 = np.flatnonzero(first_126 >= 2*p0)
+                    hit3 = np.flatnonzero(first_126 >= 3*p0)
                     row["sessions_to_2x_6m"] = int(hit2[0]+1) if len(hit2) else None
                     row["sessions_to_3x_6m"] = int(hit3[0]+1) if len(hit3) else None
             else:
@@ -116,6 +119,20 @@ def _evaluate(as_of: str) -> dict:
     out["six_month_2x_winners_in_universe"] = int(len(winners))
     out["six_month_2x_winners_selected"] = int(winners.selected.sum()) if not winners.empty else 0
     return out
+
+
+def _mean_ci(values, n=BOOTSTRAPS, seed=SEED):
+    vals = pd.to_numeric(pd.Series(values), errors="coerce").dropna().to_numpy(float)
+    if not len(vals):
+        return {"n_dates": 0, "mean": None, "ci95_low": None, "ci95_high": None}
+    rng = np.random.default_rng(seed)
+    sims = np.empty(n)
+    for i in range(n):
+        sims[i] = float(np.mean(vals[rng.integers(0, len(vals), len(vals))]))
+    return {"n_dates": int(len(vals)), "mean": float(vals.mean()),
+            "ci95_low": float(np.quantile(sims, .025)),
+            "ci95_high": float(np.quantile(sims, .975)),
+            "method": "decision-date cluster bootstrap; percentile 95% CI"}
 
 
 def _cluster_bootstrap(rows, metric, baseline, n=BOOTSTRAPS):
@@ -163,6 +180,14 @@ def main():
       "failed_or_unmatured_dates":[r for r in results if r.get("status")!="OK"],
       "bootstrap_iterations":BOOTSTRAPS,"confidence_interval_method":"decision-date cluster bootstrap, 95% percentile interval",
       "six_month_2x_winner_recall_mean_across_dates":float(np.mean(recall)) if recall else None,
+      "risk_and_recall_summary":{
+        "selected_mean_max_drawdown_6m":_mean_ci([r.get("selected_mean_max_drawdown_6m") for r in ok],seed=SEED+1),
+        "six_month_2x_winner_recall":_mean_ci(recall,seed=SEED+2),
+        "selected_2x_incidence_within_6m":_mean_ci([r.get("selected_2x_within_6m") for r in ok],seed=SEED+3),
+        "selected_3x_incidence_within_6m":_mean_ci([r.get("selected_3x_within_6m") for r in ok],seed=SEED+4),
+        "median_sessions_to_2x_when_hit":_mean_ci([r.get("median_sessions_to_2x_when_hit") for r in ok],seed=SEED+5),
+        "median_sessions_to_3x_when_hit":_mean_ci([r.get("median_sessions_to_3x_when_hit") for r in ok],seed=SEED+6)
+      },
       "horizon_summary":combined,
       "per_date_results":results,
       "limitations":["This falsifies a price-only proxy, not the full fundamental MBE.","Survivorship/delisting coverage depends on the source dataset; no absent symbol is imputed.","Simple price returns exclude dividends, costs, taxes and slippage.","24-month outcomes are reported only for dates with enough subsequent daily observations."]
