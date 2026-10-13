@@ -22,7 +22,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 1
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -33,16 +33,37 @@ jobs:
         run: |
           AS_OF="$(date -u +%F)"
           PYTHONPATH=. python scripts/ingest_pit.py --as-of "$AS_OF" --limit 500
-      - name: Persist PIT evidence
+      - name: Persist PIT evidence (retry concurrent writers; never block the scan)
+        shell: bash
         run: |
+          set -uo pipefail
           git config user.name "multibagger-bot"
           git config user.email "multibagger-bot@users.noreply.github.com"
           git add data/pit
           if git diff --cached --quiet; then
             echo "No new PIT evidence."
-          else
-            git commit -m "Archive PIT evidence"
-            git push
+            exit 0
+          fi
+          git commit -m "Archive PIT evidence"
+          pushed=0
+          for attempt in 1 2 3; do
+            if git push origin HEAD:main; then
+              pushed=1
+              break
+            fi
+            echo "Concurrent PIT writer detected; retry $attempt."
+            git fetch origin main || continue
+            if ! git rebase origin/main; then
+              if PYTHONPATH=. python scripts/merge_pit_conflicts.py; then
+                GIT_EDITOR=true git rebase --continue || true
+              else
+                git rebase --abort || true
+                break
+              fi
+            fi
+          done
+          if [ "$pushed" -ne 1 ]; then
+            echo "::warning::PIT archive push did not complete after retries. Scan will still run."
           fi
       - name: Run Multibagger
         run: |
@@ -52,4 +73,6 @@ jobs:
         if: always()
         with:
           name: multibagger-live-report
-          path: reports/multibagger-live.json
+          path: |
+            reports/multibagger-live.json
+            data/pit/manifest.json
