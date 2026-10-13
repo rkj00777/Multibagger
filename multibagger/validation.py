@@ -411,7 +411,7 @@ def validate(months, top_n=25):
         elif lift_mean is None or ci_low is None or lift_mean <= 0 or ci_low <= 0:
             evidence_status = "NOT_VALIDATED"
         else:
-            evidence_status = "EVIDENCE_PASS"
+            evidence_status = "VALIDATED"
         horizon_validation[label] = {
             "status": evidence_status,
             "observations": int(len(valid)),
@@ -438,9 +438,18 @@ def validate(months, top_n=25):
     all_mean = primary.get("all_forward_return")
     excess_return = primary.get("selection_lift")
     relative_return_ratio = primary.get("relative_return_ratio")
+    required_for_production = ("6m_126_sessions", "12m_252_sessions")
+    production_validated = all(
+        isinstance(horizon_validation.get(h), dict) and
+        horizon_validation[h].get("status") == "VALIDATED" and
+        horizon_validation[h].get("selection_lift_ci_low") is not None and
+        float(horizon_validation[h]["selection_lift_ci_low"]) > 0
+        for h in required_for_production
+    )
+    overall_status = "VALIDATED_FOR_PRODUCTION" if production_validated else primary.get("status", "INSUFFICIENT_PIT_COVERAGE")
 
     return {
-        "status": primary.get("status", "INSUFFICIENT_PIT_COVERAGE"),
+        "status": overall_status,
         "validation_scope": "historical PIT fundamental ranking; descriptive until each horizon clears independent-date and confidence-interval gates",
         "observations": int(len(out)),
         "decision_dates": int(out.decision_date.nunique()),
