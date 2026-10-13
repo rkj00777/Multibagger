@@ -30,6 +30,18 @@ class NSEHistoricalPITTests(unittest.TestCase):
         self.assertEqual(rows[0]["available_at"], "2025-01-16T20:20:00")
         self.assertEqual(rows[0]["xbrl_url"], "https://nsearchives.nseindia.com/corporate/xbrl/abc.xml")
 
+    def test_unparseable_filing_date_falls_back_to_broadcast_date(self):
+        rows = _filing_rows({
+            "data": [{
+                "symbol": "ABC",
+                "filingDate": "not-a-date",
+                "broadcastDate": "16-Jan-2025 20:20:21",
+                "xbrl": "https://nsearchives.nseindia.com/corporate/xbrl/abc.xml",
+            }]
+        }, "ABC")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["available_at"], "2025-01-16T20:20:21")
+
     def test_xbrl_prefers_quarter_flow_and_primary_instant_context(self):
         xml = b"""
         <xbrl>
