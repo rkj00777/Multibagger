@@ -3,6 +3,7 @@ from core.market_data import nse_cross_section
 from core.nse_pit import NSEPIT
 from core.pit_store import load_facts
 from multibagger.modules import score_fundamentals
+from multibagger.mbe_core import score_mbe_core
 
 HF = "https://huggingface.co/datasets/tejhq/indian-markets/resolve/main"
 MODULES = [
@@ -91,6 +92,8 @@ def _cluster_frame(out):
         return pd.DataFrame(columns=["decision_date", *MODULES, "forward_return", "fundamental_score"])
     agg = {m: "mean" for m in MODULES}
     agg.update({"forward_return": "mean", "fundamental_score": "mean"})
+    if "mbe_score" in x.columns:
+        agg["mbe_score"] = "mean"
     return x.groupby("decision_date", as_index=False).agg(agg)
 
 
@@ -159,12 +162,14 @@ def _bh_fdr(pvals):
     return q
 
 
-def _selection_lift_cluster_ci(out, n_boot=10000, seed=103):
+def _selection_lift_cluster_ci(out, n_boot=10000, seed=103, score_col="fundamental_score"):
     x = out.copy()
     x["decision_date"] = pd.to_datetime(x["decision_date"], errors="coerce")
-    x["fundamental_score"] = pd.to_numeric(x["fundamental_score"], errors="coerce")
+    if score_col not in x.columns:
+        return {"status": "SCORE_COLUMN_MISSING", "score_col": score_col}
+    x[score_col] = pd.to_numeric(x[score_col], errors="coerce")
     x["forward_return"] = pd.to_numeric(x["forward_return"], errors="coerce")
-    x = x.dropna(subset=["decision_date", "fundamental_score", "forward_return"])
+    x = x.dropna(subset=["decision_date", score_col, "forward_return"])
     if x.empty:
         return {"status": "NO_DATA"}
     by_date = x.groupby("decision_date")
@@ -172,8 +177,8 @@ def _selection_lift_cluster_ci(out, n_boot=10000, seed=103):
     for date, g in by_date:
         # Select the top quartile independently within each decision date;
         # a global cutoff would silently change the selected fraction over time.
-        cutoff = g["fundamental_score"].quantile(.75)
-        top = g.loc[g["fundamental_score"] >= cutoff, "forward_return"].dropna()
+        cutoff = g[score_col].quantile(.75)
+        top = g.loc[g[score_col] >= cutoff, "forward_return"].dropna()
         allr = g["forward_return"].dropna()
         if len(top) and len(allr):
             rows.append({
@@ -221,7 +226,7 @@ def _selection_lift_cluster_ci(out, n_boot=10000, seed=103):
     }
 
 
-def _statistical_validation(out):
+def _statistical_validation(out, score_col="fundamental_score"):
     missing = [c for c in REQUIRED_COLUMNS if c not in out.columns]
     if missing:
         raise ValueError(f"Statistical validation missing required columns: {missing}")
@@ -247,12 +252,12 @@ def _statistical_validation(out):
 
     selected_frames = []
     for _date, group in out.groupby("decision_date"):
-        cutoff = group.fundamental_score.quantile(.75)
-        selected_frames.append(group[group.fundamental_score >= cutoff])
+        cutoff = group[score_col].quantile(.75)
+        selected_frames.append(group[group[score_col] >= cutoff])
     top_selected = pd.concat(selected_frames, ignore_index=True) if selected_frames else out.iloc[0:0]
     top = top_selected.forward_return.dropna()
     allr = out.forward_return.dropna()
-    lift = _selection_lift_cluster_ci(out, n_boot=10000, seed=103)
+    lift = _selection_lift_cluster_ci(out, n_boot=10000, seed=103, score_col=score_col)
 
     insufficient = independent_dates < 8
     gate = "INSUFFICIENT_INDEPENDENT_SAMPLE" if insufficient else (
@@ -352,19 +357,36 @@ def validate(months, top_n=25):
             continue
         fr = forward_returns(fs.symbol.tolist(), as_of)
         z = fs.merge(fr, on="symbol", how="inner")
+        price_cols = [c for c in ["symbol", "ret_21d", "ret_63d", "ret_126d", "ret_252d"] if c in pool.columns]
+        z = z.merge(pool[price_cols].drop_duplicates("symbol"), on="symbol", how="left")
         diag["forward_price_symbols"] = int(fr.symbol.nunique()) if not fr.empty else 0
         diag["usable_observations"] = int(z.forward_return.notna().sum()) if "forward_return" in z else 0
         diag["status"] = "OK" if diag["usable_observations"] else "NO_FORWARD_RETURN"
         date_diagnostics.append(diag)
         z["fundamental_score"] = z[MODULES].mean(axis=1, skipna=True)
         z["fundamental_module_count"] = z[MODULES].notna().sum(axis=1)
+
+        # Historical MBE composite proxy: reproduce its implemented formula
+        # using only PIT fundamentals and point-in-time price returns. Historical
+        # catalyst event materiality is not archived comprehensively, so this
+        # proxy is explicitly NOT treated as a full-engine validation.
+        def _bounded_growth(g):
+            return g.map(lambda x: max(0.0, min(100.0, 50.0 + 100.0 * float(x)))
+                         if pd.notna(x) else float("nan"))
+        z["earnings_inflection"] = (
+            _bounded_growth(z["pat_growth"]) * .55
+            + _bounded_growth(z["revenue_growth"]) * .25
+            + _bounded_growth(z["ebitda_growth"]) * .20
+        )
+        z["balance_sheet_runway"] = z["governance_balance_sheet"]
+        z = score_mbe_core(z)
         z["decision_date"] = as_of
 
         # Preserve every module and every forward horizon for downstream
         # statistical validation. Null future horizons remain visible as
         # immature observations rather than being mislabeled as failures.
         horizon_columns = ["forward_return_6m", "forward_return_12m", "forward_return_24m"]
-        keep = REQUIRED_COLUMNS + [col for col in horizon_columns if col in z.columns]
+        keep = REQUIRED_COLUMNS + ["mbe_score"] + [col for col in horizon_columns if col in z.columns]
         rows.extend(z[keep].to_dict("records"))
 
     out = pd.DataFrame(rows)
@@ -401,7 +423,7 @@ def validate(months, top_n=25):
                 "decision_dates": 0,
             }
             continue
-        stats = _statistical_validation(frame)
+        stats = _statistical_validation(frame, score_col="fundamental_score")
         lift = stats.get("selection_lift_ci", {})
         independent_dates = int(valid.decision_date.nunique())
         ci_low = lift.get("difference_ci_low")
@@ -412,6 +434,34 @@ def validate(months, top_n=25):
             evidence_status = "NOT_VALIDATED"
         else:
             evidence_status = "VALIDATED"
+
+        # Score the actual MBE composite separately on the exact same
+        # observations. This excludes the historical catalyst gate because the
+        # archive does not yet contain a complete timestamped catalyst panel.
+        mbe_lift = _selection_lift_cluster_ci(frame, n_boot=10000, seed=203, score_col="mbe_score")
+        mbe_dates = int(valid.decision_date.nunique())
+        mbe_mean = mbe_lift.get("difference_in_means")
+        mbe_ci_low = mbe_lift.get("difference_ci_low")
+        if mbe_lift.get("status") != "OK":
+            mbe_status = "NO_MBE_SCORE_DATA"
+        elif mbe_dates < 8:
+            mbe_status = "INSUFFICIENT_INDEPENDENT_SAMPLE"
+        elif mbe_mean is None or mbe_ci_low is None or mbe_mean <= 0 or mbe_ci_low <= 0:
+            mbe_status = "NOT_VALIDATED"
+        else:
+            mbe_status = "VALIDATED"
+        mbe_validation = {
+            "status": mbe_status,
+            "score_scope": "MBE composite proxy; historical catalyst gate excluded",
+            "observations": int(len(valid)),
+            "decision_dates": mbe_dates,
+            "top_quartile_forward_return": mbe_lift.get("top_quartile_mean"),
+            "all_forward_return": mbe_lift.get("all_mean"),
+            "selection_lift": mbe_mean,
+            "selection_lift_ci_low": mbe_ci_low,
+            "selection_lift_ci_high": mbe_lift.get("difference_ci_high"),
+            "positive_hit_rate": mbe_lift.get("top_quartile_positive_hit_rate"),
+        }
         horizon_validation[label] = {
             "status": evidence_status,
             "observations": int(len(valid)),
@@ -429,6 +479,7 @@ def validate(months, top_n=25):
                 and lift.get("all_mean") > 1e-12 else None
             ),
             "statistical_validation": stats,
+            "mbe_composite_validation": mbe_validation,
         }
 
     # Preserve the 12-month horizon as the backward-compatible top-level result.
@@ -450,7 +501,8 @@ def validate(months, top_n=25):
 
     return {
         "status": overall_status,
-        "validation_scope": "historical PIT fundamental ranking; descriptive until each horizon clears independent-date and confidence-interval gates",
+        "validation_scope": "historical PIT fundamental ranking plus MBE composite proxy; full catalyst-gate validation remains separate",
+        "full_model_validation_status": "INCOMPLETE_HISTORICAL_CATALYST_ARCHIVE",
         "observations": int(len(out)),
         "decision_dates": int(out.decision_date.nunique()),
         "top_quartile_forward_return": top_mean,
