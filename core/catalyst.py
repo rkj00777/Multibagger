@@ -20,11 +20,11 @@ BINDING = (
     r"award of contract|contract signed|\bloa\b)\b"
 )
 NEGATIVE_PATTERNS = (
-    r"\\b(resign(?:ation|ed)?|default(?:ed)?|fraud|pledge invocation|downgrade|insolvency|wilful defaulter)\\b",
-    r"\\b(order|contract|project|purchase order)\\s+(?:was\\s+)?(?:cancelled|canceled|withdrawn|terminated)\\b",
-    r"\\b(?:cancelled|canceled|withdrawn|terminated)\\s+(?:order|contract|project|purchase order)\\b",
-    r"\\bdelay in (?:execution|delivery|payment|commissioning|completion|order fulfilment|order fulfillment)\\b",
-    r"\\b(?:penalty imposed|forensic audit|investigation into|regulatory investigation)\\b"
+    r"\b(resign(?:ation|ed)?|default(?:ed)?|fraud|pledge invocation|downgrade|insolvency|wilful defaulter)\b",
+    r"\b(order|contract|project|purchase order)\s+(?:was\s+)?(?:cancelled|canceled|withdrawn|terminated)\b",
+    r"\b(?:cancelled|canceled|withdrawn|terminated)\s+(?:order|contract|project|purchase order)\b",
+    r"\bdelay in (?:execution|delivery|payment|commissioning|completion|order fulfilment|order fulfillment)\b",
+    r"\b(?:penalty imposed|forensic audit|investigation into|regulatory investigation)\b"
 )
 DATE_KEYS = ("available_at", "broadcast_datetime", "announcement_date",
              "announcementDate", "an_dt", "date", "dateTime", "timestamp")
