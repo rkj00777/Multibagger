@@ -4,7 +4,7 @@ import pandas as pd
 from core.market_data import nse_cross_section
 from core.pit_store import load_facts, coverage as pit_coverage
 from core.nse_pit import NSEPIT
-from core.catalyst import NSECatalyst, catalyst_score
+from core.catalyst import NSECatalyst, catalyst_score, assess_catalyst
 from core.initial_scanners import build_scanner_funnel
 from multibagger.modules import score_fundamentals
 from multibagger.early_inflection import score_early_inflection
@@ -148,7 +148,13 @@ def run(as_of:str):
     for item in cats:
         sym=item.get("symbol") or item.get("sym")
         if sym: catmap.setdefault(sym,[]).append(item)
-    mbe_pool["catalyst_score"]=mbe_pool.symbol.map(lambda s:catalyst_score(catmap.get(s,[])))
+    catalyst_audits = {str(s): assess_catalyst(catmap.get(s, []), as_of) for s in mbe_pool.symbol}
+    mbe_pool["catalyst_score"] = mbe_pool.symbol.map(lambda s: catalyst_audits.get(str(s), {}).get("score", 20.0))
+    mbe_pool["catalyst_status"] = mbe_pool.symbol.map(lambda s: catalyst_audits.get(str(s), {}).get("status", "NO_VERIFIABLE_CATALYST"))
+    mbe_pool["catalyst_reasons"] = mbe_pool.symbol.map(lambda s: " | ".join(catalyst_audits.get(str(s), {}).get("reasons", [])))
+    mbe_pool["catalyst_materiality_ratio"] = mbe_pool.symbol.map(lambda s: catalyst_audits.get(str(s), {}).get("materiality_ratio"))
+    mbe_pool["catalyst_verified_events"] = mbe_pool.symbol.map(lambda s: catalyst_audits.get(str(s), {}).get("verified_events", 0))
+    mbe_pool["catalyst_excluded_events"] = mbe_pool.symbol.map(lambda s: catalyst_audits.get(str(s), {}).get("excluded_events", 0))
 
     ei_final=score_early_inflection(mbe_pool,mbe_pool,catmap)
     for c in ["order_visibility","capacity_inflection","structural_theme","early_inflection_score","early_stage"]:
@@ -205,7 +211,8 @@ def run(as_of:str):
         "six_month_return","six_month_runup_pass","entry_stage",
         "chartink_hit","screener_hit","scanner_score","early_momentum_score","discovery_score",
         "fundamental_score","fundamental_module_count","fundamental_evidence","period_coverage","pit_verified",
-        "mbe_score","catalyst_score","earnings_inflection","order_visibility","capacity_inflection",
+        "mbe_score","catalyst_score","catalyst_status","catalyst_reasons","catalyst_materiality_ratio",
+        "catalyst_verified_events","catalyst_excluded_events","earnings_inflection","order_visibility","capacity_inflection",
         "structural_theme","early_inflection_score","early_stage","trap_flags","trap_firewall_pass"] if c in final.columns]
 
     return {"engine":"Multibagger","version":VERSION,"as_of_requested":as_of,
@@ -229,5 +236,5 @@ def run(as_of:str):
                      "fundamental":int(len(fundamental_pool)),"mbe":int(len(mbe_pool)),"catalyst_finalists":int(len(final))},
             "final_candidates":final[cols].to_dict(orient="records"),
             "promoted_candidates":promoted[cols].to_dict(orient="records"),
-            "mbe_gate_audit":mbe_pool[[c for c in ["symbol","name","close","ret_21d","ret_63d","ret_126d","entry_stage","fundamental_score","fundamental_evidence","mbe_score","catalyst_score","pit_verified","trap_firewall_pass","trap_flags","gate_mbe_pass","gate_fundamental_pass","gate_evidence_pass","gate_catalyst_pass","gate_trap_pass","gate_pit_pass","gate_6m_pass","gate_final_eligibility","primary_rejection_reason","order_visibility","capacity_inflection","structural_theme","early_inflection_score","early_stage"] if c in mbe_pool.columns]].to_dict(orient="records"),
+            "mbe_gate_audit":mbe_pool[[c for c in ["symbol","name","close","ret_21d","ret_63d","ret_126d","entry_stage","fundamental_score","fundamental_evidence","mbe_score","catalyst_score","catalyst_status","catalyst_reasons","catalyst_materiality_ratio","catalyst_verified_events","catalyst_excluded_events","pit_verified","trap_firewall_pass","trap_flags","gate_mbe_pass","gate_fundamental_pass","gate_evidence_pass","gate_catalyst_pass","gate_trap_pass","gate_pit_pass","gate_6m_pass","gate_final_eligibility","primary_rejection_reason","order_visibility","capacity_inflection","structural_theme","early_inflection_score","early_stage"] if c in mbe_pool.columns]].to_dict(orient="records"),
             "validation_status":"CURRENT_LIVE_DISCOVERY; PIT_PROMOTION_ONLY; HISTORICAL_WINNER_AUDIT_SEPARATE"}
