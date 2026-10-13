@@ -41,6 +41,10 @@ class CatalystMaterialityTests(unittest.TestCase):
         self.assertEqual(result["status"], "NEGATIVE")
         self.assertEqual(result["score"], 0)
 
+    def test_routine_mention_of_no_delay_is_not_negative(self):
+        result = assess_catalyst([self.event("Project remains on schedule with no delay")], "2026-10-13")
+        self.assertEqual(result["status"], "UNVERIFIED")
+
     def test_future_event_is_not_point_in_time_eligible(self):
         result = assess_catalyst([self.event("Binding contract awarded", announcement_date="2026-10-20",
             contract_value_cr=50, annual_revenue_cr=100, customer_name="Client")], "2026-10-13")
