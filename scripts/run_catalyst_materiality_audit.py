@@ -29,9 +29,12 @@ def main():
     rows = []
     for symbol, name in SYMBOLS.items():
         raw = by_symbol.get(symbol, [])
-        result = assess_catalyst(raw, as_of)
+        filings = [item for item in raw if item.get("source_type") == "NSE_CORPORATE_ANNOUNCEMENT"]
+        errors = [item.get("retrieval_error", "UNKNOWN") for item in raw if item.get("source_type") == "NSE_RETRIEVAL_ERROR"]
+        result = assess_catalyst(filings, as_of)
         rows.append({"symbol": symbol, "name": name, "as_of": as_of,
-                     "retrieved_exchange_filings": len(raw), **result})
+                     "retrieved_exchange_filings": len(filings),
+                     "source_error_count": len(errors), "source_errors": errors, **result})
     counts = {}
     for row in rows:
         counts[row["status"]] = counts.get(row["status"], 0) + 1
