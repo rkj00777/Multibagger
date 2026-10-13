@@ -40,6 +40,7 @@ class ProductionPromotionPolicyTests(unittest.TestCase):
     def test_validated_report_requires_positive_lift_ci_and_eight_dates(self):
         report = {
             "status": "VALIDATED_FOR_PRODUCTION",
+            "full_model_validation_status": "FULL_MODEL_VALIDATED",
             "horizon_validation": {
                 "6m_126_sessions": {
                     "status": "VALIDATED",
