@@ -27,6 +27,16 @@ def production_validation_status(path="reports/multibagger-pit-validation.json")
     if not isinstance(horizons, dict):
         return {"approved": False, "reason": "HORIZON_VALIDATION_MISSING", "independent_dates": {}}
 
+    # The fundamental and MBE-composite proxy tests do not include a complete
+    # historical catalyst archive. Never promote the full live engine until
+    # timestamped catalyst materiality has also been independently validated.
+    if report.get("full_model_validation_status") != "FULL_MODEL_VALIDATED":
+        return {
+            "approved": False,
+            "reason": "FULL_MODEL_VALIDATION_INCOMPLETE_HISTORICAL_CATALYST_ARCHIVE",
+            "independent_dates": {},
+        }
+
     dates = {}
     reasons = []
     for horizon in REQUIRED_HORIZONS:
