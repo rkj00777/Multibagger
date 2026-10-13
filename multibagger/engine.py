@@ -93,7 +93,10 @@ def run(as_of:str):
                 "discovery_pool":int(len(discovery)),"fundamental_pool":0,"mbe_pool":0,"final_shortlist":0,
                 "fundamental_facts":0,"fundamental_data_status":"NO_PIT_OR_PUBLIC_FUNDAMENTALS",
                 "scanner_status":scanner_status,"pit_coverage":pit_stats,"promotion_count":0,
-                "promotion_block":"No production promotion until fundamentals are available",
+                "shadow_promotion_count":0,"shadow_promoted_candidates":[],"promoted_candidates":[],
+                "production_validation_gate":{"approved":False,"reason":"NO_PIT_OR_PUBLIC_FUNDAMENTALS","independent_dates":{}},
+                "promotion_mode":"SHADOW_ONLY",
+                "promotion_block":"No production promotion until timestamped fundamentals and independent validation are available",
                 "validation_status":"CURRENT_LIVE_DISCOVERY; HISTORICAL_PIT_VALIDATION_SEPARATE"}
 
     fs=score_fundamentals(discovery,records)
@@ -121,6 +124,9 @@ def run(as_of:str):
                 "discovery_pool":int(len(discovery)),"fundamental_pool":0,"mbe_pool":0,"final_shortlist":0,
                 "fundamental_facts":int(len(records)),"fundamental_data_status":source_status,
                 "scanner_status":scanner_status,"pit_coverage":pit_stats,"promotion_count":0,
+                "shadow_promotion_count":0,"shadow_promoted_candidates":[],"promoted_candidates":[],
+                "production_validation_gate":{"approved":False,"reason":"NO_FUNDAMENTAL_CANDIDATES","independent_dates":{}},
+                "promotion_mode":"SHADOW_ONLY",
                 "promotion_block":"No candidates cleared fundamental confirmation",
                 "validation_status":"CURRENT_LIVE_DISCOVERY; HISTORICAL_PIT_VALIDATION_SEPARATE"}
 
