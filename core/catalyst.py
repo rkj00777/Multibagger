@@ -9,15 +9,15 @@ URL = BASE + "/api/corporate-announcements"
 # Terms are used only to classify commitment quality, never to award positive
 # credit by themselves.
 PROMOTIONAL = (
-    r"\\b(non[- ]binding|exploratory|expression of interest|in principle|"
+    r"\b(non[- ]binding|exploratory|expression of interest|in principle|"
     r"proposed|proposal|strategic intent|subject to definitive agreement|"
-    r"memorandum of understanding|\\bmou\\b|letter of intent|\\bloi\\b|"
-    r"pilot project|feasibility study|discussions with|in talks with)\\b"
+    r"memorandum of understanding|\bmou\b|letter of intent|\bloi\b|"
+    r"pilot project|feasibility study|discussions with|in talks with)\b"
 )
 BINDING = (
-    r"\\b(purchase order|work order|binding contract|contract awarded|"
+    r"\b(purchase order|work order|binding contract|contract awarded|"
     r"order received|firm order|definitive agreement|letter of award|"
-    r"award of contract|contract signed|\\bloa\\b)\\b"
+    r"award of contract|contract signed|\bloa\b)\b"
 )
 NEGATIVE = (
     "resign", "default", "fraud", "pledge invocation", "downgrade", "delay",
