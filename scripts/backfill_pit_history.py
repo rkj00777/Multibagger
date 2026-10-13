@@ -17,6 +17,7 @@ import pandas as pd
 
 from core.market_data import nse_cross_section
 from core.nse_historical_pit import NSEHistoricalPIT
+from core.bse_historical_pit import BSEHistoricalPIT
 
 DEFAULT_DATES = [
     "2019-03-29", "2019-06-28", "2019-09-30", "2019-12-31",
@@ -55,7 +56,20 @@ def fetch_symbol_history(symbol: str, dates: list[str]) -> dict:
         try:
             facts.extend(client.facts(symbol, as_of) or [])
         except Exception as exc:
-            errors.append({"as_of": as_of, "error": type(exc).__name__, "detail": str(exc)[:240]})
+            errors.append({"as_of": as_of, "source": "NSE", "error": type(exc).__name__, "detail": str(exc)[:240]})
+    # If NSE's current catalog has no usable timestamped facts, use the
+    # independent BSE official financial-result archive and XBRL attachments.
+    # Original exchange dissemination timestamps are retained; no reconstruction.
+    if not facts:
+        try:
+            bse = BSEHistoricalPIT(timeout=25, delay=0.25, max_pages=8)
+            for as_of in dates:
+                try:
+                    facts.extend(bse.facts(symbol, as_of) or [])
+                except Exception as exc:
+                    errors.append({"as_of": as_of, "source": "BSE_ARCHIVE", "error": type(exc).__name__, "detail": str(exc)[:240]})
+        except Exception as exc:
+            errors.append({"as_of": None, "source": "BSE_ARCHIVE", "error": type(exc).__name__, "detail": str(exc)[:240]})
     # A fact can be encountered at multiple checkpoints; dedupe by its full
     # filing/period identity while preserving revisions with different dates.
     unique = {}
@@ -122,7 +136,7 @@ def persist_facts(facts: list[dict], report: dict) -> int:
     report["fact_files"] = sorted(p.name for p in root.glob("*.jsonl"))
     manifest = Path("data/pit/manifest.json")
     manifest.write_text(json.dumps({
-        "source": "NSE_CORPORATE_FINANCIAL_RESULTS_XBRL",
+        "sources": ["NSE_CORPORATE_FINANCIAL_RESULTS_XBRL", "BSE_OFFICIAL_ARCHIVE_XBRL"],
         "pit_rule": "available_at <= decision_date AND period_end <= decision_date",
         "backfill_dates": report["decision_dates"],
         "symbols_selected_by_date": report["symbols_selected_by_date"],
@@ -130,6 +144,8 @@ def persist_facts(facts: list[dict], report: dict) -> int:
         "facts_received": report["facts_received"],
         "persisted_new_facts": written,
         "fact_files": report["fact_files"],
+        "excluded_symbol_date_combinations": report.get("excluded_symbol_date_combinations", 0),
+        "exclusions_file": "data/pit/exclusions.jsonl",
     }, indent=2, sort_keys=True), encoding="utf-8")
     return written
 
@@ -168,14 +184,39 @@ def main():
                 print(f"symbols_done={i}/{len(futures)}", flush=True)
 
     facts = [fact for result in results for fact in result["facts"]]
+    # Record every requested symbol/date without a timestamped, period-eligible
+    # fact. Such rows are explicitly excluded from historical fundamental scoring.
+    exclusions = []
+    for result in results:
+        symbol = result["symbol"]
+        symbol_facts = result["facts"]
+        for as_of in symbol_dates.get(symbol, []):
+            cutoff = pd.Timestamp(as_of + " 23:59:59")
+            eligible = False
+            for fact in symbol_facts:
+                available = pd.to_datetime(fact.get("available_at"), errors="coerce")
+                period_end = pd.to_datetime(fact.get("period_end"), errors="coerce")
+                if pd.notna(available) and pd.notna(period_end) and available <= cutoff and period_end <= cutoff:
+                    eligible = True
+                    break
+            if not eligible:
+                exclusions.append({"symbol": symbol, "decision_date": as_of,
+                    "status": "PIT_UNAVAILABLE_EXCLUDED",
+                    "reason": "NO_TIMESTAMPED_EXCHANGE_FACT_AVAILABLE_BY_DECISION_DATE",
+                    "sources_attempted": ["NSE_CURRENT_ARCHIVE", "BSE_OFFICIAL_ARCHIVE"]})
+    Path("data/pit").mkdir(parents=True, exist_ok=True)
+    Path("data/pit/exclusions.jsonl").write_text(
+        "".join(json.dumps(row, separators=(",", ":"), sort_keys=True) + "\\n" for row in exclusions),
+        encoding="utf-8")
     symbols_with_facts = sum(bool(r["facts"]) for r in results)
     symbols_with_errors = len({e.get("symbol") for e in errors if e.get("symbol")})
     coverage_ratio = symbols_with_facts / len(symbol_dates) if symbol_dates else 0.0
     report = {
         "status": "PIT_HISTORY_BACKFILL_COMPLETE" if coverage_ratio >= 0.50 else "PIT_HISTORY_BACKFILL_INSUFFICIENT_COVERAGE",
-        "source_endpoint": "NSE /api/corporates-financial-results",
-        "source_coverage_note": "NSE XBRL documents before 2019 may be purged; missing facts are not replaced with current fundamentals.",
-        "source": "NSE corporate financial-results/XBRL; free source",
+        "source_endpoint": "NSE /api/corporates-financial-results plus BSE /BseIndiaAPI/api/AnnSubCategoryGetData/w and official CorpXbrlGen.aspx attachments",
+        "source_coverage_note": "BSE official exchange archive is attempted when NSE yields no usable timestamped facts. Missing symbol/date combinations are written to data/pit/exclusions.jsonl and never replaced with current fundamentals.",
+        "sources_attempted": ["NSE_CORPORATE_FINANCIAL_RESULTS_XBRL", "BSE_OFFICIAL_ARCHIVE_XBRL"],
+        "source": "Free official NSE and BSE exchange filing archives",
         "pit_rule": "available_at <= decision_date AND period_end <= decision_date",
         "decision_dates": dates,
         "top_n_per_date": int(args.top_n),
@@ -189,6 +230,9 @@ def main():
         "facts_received": len(facts),
         "error_count": len(errors),
         "errors_sample": errors[:100],
+        "excluded_symbol_date_combinations": len(exclusions),
+        "exclusions_file": "data/pit/exclusions.jsonl",
+        "exclusions_sample": exclusions[:100],
     }
     persist_facts(facts, report)
     Path("reports").mkdir(parents=True, exist_ok=True)
