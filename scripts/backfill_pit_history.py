@@ -206,7 +206,7 @@ def main():
                     "sources_attempted": ["NSE_CURRENT_ARCHIVE", "BSE_OFFICIAL_ARCHIVE"]})
     Path("data/pit").mkdir(parents=True, exist_ok=True)
     Path("data/pit/exclusions.jsonl").write_text(
-        "".join(json.dumps(row, separators=(",", ":"), sort_keys=True) + "\\n" for row in exclusions),
+        "".join(json.dumps(row, separators=(",", ":"), sort_keys=True) + "\n" for row in exclusions),
         encoding="utf-8")
     symbols_with_facts = sum(bool(r["facts"]) for r in results)
     symbols_with_errors = len({e.get("symbol") for e in errors if e.get("symbol")})
