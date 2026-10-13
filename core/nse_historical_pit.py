@@ -56,7 +56,7 @@ def _date(value):
     if not value:
         return None
     s = str(value).strip().replace("Z", "+00:00")
-    for fmt in ("%d-%b-%Y %H:%M:%S", "%d-%b-%Y", "%Y-%m-%dT%H:%M:%S%z",
+    for fmt in ("%d-%b-%Y %H:%M:%S", "%d-%b-%Y %H:%M", "%d-%b-%Y", "%Y-%m-%dT%H:%M:%S%z",
                 "%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
         try:
             return datetime.strptime(s, fmt).replace(tzinfo=None)
@@ -98,11 +98,20 @@ def _filing_rows(payload, symbol):
             xbrl = _url(low.get(key))
             if xbrl:
                 break
-        filed = low.get("filingdate") or low.get("broadcastdate") or low.get("broadcast_date")
-        if not xbrl or not filed:
-            continue
-        available = _date(filed)
-        if not available:
+        # NSE filingDate is often minute-precision (e.g. 16-Jan-2025 20:20)
+        # while broadcastDate/exchdisstime may carry seconds. Parse each
+        # candidate in order rather than letting an unparseable preferred field
+        # hide a valid public-availability timestamp.
+        date_candidates = (
+            low.get("filingdate"),
+            low.get("broadcastdate"),
+            low.get("broadcast_date"),
+            low.get("exchdisstime"),
+            low.get("creationdate"),
+            low.get("creation_date"),
+        )
+        available = next((_date(value) for value in date_candidates if value and _date(value)), None)
+        if not xbrl or not available:
             continue
         key = (xbrl, available.isoformat())
         if key in seen:
