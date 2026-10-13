@@ -179,7 +179,9 @@ def run(as_of:str):
         mbe_pool.gate_final_eligibility
     ].sort_values(["catalyst_score","mbe_score","fundamental_score"],ascending=False).head(8).copy()
 
-    promoted=final[
+    # Candidate-level qualification is a shadow/paper-trading result. It is
+    # not a production approval unless independent historical validation passes.
+    shadow_promoted=final[
         final.mbe_score.ge(65) &
         final.fundamental_score.ge(60) &
         final.fundamental_evidence.ge(.75) &
@@ -188,6 +190,10 @@ def run(as_of:str):
         final.pit_verified &
         final.six_month_runup_pass
     ].copy()
+
+    from multibagger.promotion_policy import production_validation_status
+    validation_gate=production_validation_status()
+    promoted=shadow_promoted.copy() if validation_gate["approved"] else shadow_promoted.iloc[0:0].copy()
 
     cols=[c for c in ["symbol","name","close","ret_21d","ret_63d","ret_126d","ret_252d",
         "six_month_return","six_month_runup_pass","entry_stage",
@@ -208,7 +214,11 @@ def run(as_of:str):
             "pit_rule":"Only facts with NSE exchange availability/broadcast timestamp <= as_of are PIT eligible",
             "pit_coverage":pit_stats,"catalyst_data_status":"NSE_CORPORATE_ANNOUNCEMENTS_FINALIST_ONLY",
             "promotion_count":int(len(promoted)),
-            "promotion_block":None if len(promoted) else "No finalist cleared all gates with PIT verification",
+            "shadow_promotion_count":int(len(shadow_promoted)),
+            "shadow_promoted_candidates":shadow_promoted[cols].to_dict(orient="records"),
+            "production_validation_gate":validation_gate,
+            "promotion_mode":"PRODUCTION" if validation_gate["approved"] else "SHADOW_ONLY",
+            "promotion_block":None if len(promoted) else ("Model validation gate not passed: " + validation_gate["reason"] if len(shadow_promoted) else "No finalist cleared candidate-level gates with PIT verification"),
             "funnel":{"available_universe":int(n_universe),"scanner":int(n_scanner),"discovery":int(len(discovery)),
                      "fundamental":int(len(fundamental_pool)),"mbe":int(len(mbe_pool)),"catalyst_finalists":int(len(final))},
             "final_candidates":final[cols].to_dict(orient="records"),
