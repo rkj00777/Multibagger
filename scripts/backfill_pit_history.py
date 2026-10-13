@@ -57,13 +57,24 @@ def fetch_symbol_history(symbol: str, dates: list[str]) -> dict:
             facts.extend(client.facts(symbol, as_of) or [])
         except Exception as exc:
             errors.append({"as_of": as_of, "source": "NSE", "error": type(exc).__name__, "detail": str(exc)[:240]})
-    # If NSE's current catalog has no usable timestamped facts, use the
-    # independent BSE official financial-result archive and XBRL attachments.
-    # Original exchange dissemination timestamps are retained; no reconstruction.
-    if not facts:
+    # Fill any symbol/date holes with the independent BSE official financial-
+    # result archive and XBRL attachments. Original dissemination timestamps
+    # are retained; no current-value reconstruction is permitted.
+    missing_dates = []
+    for as_of in dates:
+        cutoff = pd.Timestamp(as_of + " 23:59:59")
+        if not any(
+            pd.notna(pd.to_datetime(f.get("available_at"), errors="coerce")) and
+            pd.notna(pd.to_datetime(f.get("period_end"), errors="coerce")) and
+            pd.to_datetime(f.get("available_at"), errors="coerce") <= cutoff and
+            pd.to_datetime(f.get("period_end"), errors="coerce") <= cutoff
+            for f in facts
+        ):
+            missing_dates.append(as_of)
+    if missing_dates:
         try:
             bse = BSEHistoricalPIT(timeout=25, delay=0.25, max_pages=8)
-            for as_of in dates:
+            for as_of in missing_dates:
                 try:
                     facts.extend(bse.facts(symbol, as_of) or [])
                 except Exception as exc:
