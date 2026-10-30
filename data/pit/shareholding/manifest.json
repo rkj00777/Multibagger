@@ -1,5 +1,5 @@
 {
-  "as_of": "2026-10-23",
+  "as_of": "2026-10-30",
   "new_or_seen_rows": 0,
   "offset": 0,
   "pit_rule": "broadcast_time <= as_of",
